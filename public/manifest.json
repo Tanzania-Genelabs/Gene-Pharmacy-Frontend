@@ -1,0 +1,16 @@
+{
+  "name": "Gene Pharmacy",
+  "short_name": "GenePharmacy",
+  "description": "Pharmacy Management System — Powered by Genelabs Tanzania",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#16a34a",
+  "icons": [
+    {
+      "src": "/favicon.ico",
+      "sizes": "any",
+      "type": "image/x-icon"
+    }
+  ]
+}
