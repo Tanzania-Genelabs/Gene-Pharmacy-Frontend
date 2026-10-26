@@ -15,5 +15,5 @@ export * from "./expiry.api";
 export * from "./customer.api";
 export * from "./loyalty.api";
 export * from "./analytics.api";
-export * from "./payment.api";
+export * from "./billing.api";
 export * from "./pos.api";
