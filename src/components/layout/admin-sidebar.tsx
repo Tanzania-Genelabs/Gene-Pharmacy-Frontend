@@ -8,6 +8,7 @@ import {
   Building2,
   Users,
   CreditCard,
+  Banknote,
   Settings,
   Shield,
   ChevronLeft,
@@ -30,6 +31,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: "Pharmacies", href: "/admin/pharmacies", icon: Building2 },
   { label: "Users", href: "/admin/users", icon: Users },
   { label: "Subscriptions", href: "/admin/subscriptions", icon: CreditCard },
+  { label: "Plans & Pricing", href: "/admin/billing-plans", icon: Banknote },
   { label: "Audit Logs", href: "/admin/audit-logs", icon: Shield },
   { label: "Settings", href: "/admin/settings", icon: Settings },
 ];
