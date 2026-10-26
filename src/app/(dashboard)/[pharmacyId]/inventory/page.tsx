@@ -28,7 +28,7 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
-import type { StockAdjustmentRequest } from "@/types";
+import type { StockAdjustmentRequest, StockTransferRequest } from "@/types";
 
 interface PageProps {
   params: Promise<{ pharmacyId: string }>;
@@ -39,6 +39,9 @@ export default function InventoryPage({ params }: PageProps) {
   const qc = useQueryClient();
   const [page, setPage] = useState(0);
   const [showAdjust, setShowAdjust] = useState(false);
+  const [showTransfer, setShowTransfer] = useState(false);
+  const emptyTransfer: StockTransferRequest = { drugId: "", fromBranchId: "", toBranchId: "", quantity: 0, reference: "" };
+  const [transferForm, setTransferForm] = useState<StockTransferRequest>(emptyTransfer);
   const [adjustForm, setAdjustForm] = useState<StockAdjustmentRequest>({
     drugId: "",
     branchId: "",
@@ -66,13 +69,13 @@ export default function InventoryPage({ params }: PageProps) {
   const { data: drugs } = useQuery({
     queryKey: ["drugs", pharmacyId, "all"],
     queryFn: () => drugApi.list(pharmacyId, { size: 500 }),
-    enabled: showAdjust,
+    enabled: showAdjust || showTransfer,
   });
 
   const { data: branches } = useQuery({
     queryKey: ["branches", pharmacyId],
     queryFn: () => branchApi.list(pharmacyId),
-    enabled: showAdjust,
+    enabled: showAdjust || showTransfer,
   });
 
   const adjustMutation = useMutation({
@@ -88,6 +91,38 @@ export default function InventoryPage({ params }: PageProps) {
       toast.error(msg ?? "Failed to adjust stock");
     },
   });
+
+  const transferMutation = useMutation({
+    mutationFn: (data: StockTransferRequest) =>
+      inventoryApi.transfer(pharmacyId, { ...data, reference: data.reference?.trim() || undefined }),
+    onSuccess: () => {
+      toast.success("Stock transferred successfully");
+      qc.invalidateQueries({ queryKey: ["inventory"] });
+      setShowTransfer(false);
+      setTransferForm(emptyTransfer);
+    },
+    onError: (err: unknown) => {
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
+      toast.error(msg ?? "Failed to transfer stock");
+    },
+  });
+
+  function handleTransferSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!transferForm.drugId || !transferForm.fromBranchId || !transferForm.toBranchId) {
+      toast.error("Drug, source branch and destination branch are required");
+      return;
+    }
+    if (transferForm.fromBranchId === transferForm.toBranchId) {
+      toast.error("Source and destination branch must differ");
+      return;
+    }
+    if (!Number.isInteger(transferForm.quantity) || transferForm.quantity < 1) {
+      toast.error("Quantity must be at least 1");
+      return;
+    }
+    transferMutation.mutate(transferForm);
+  }
 
   function openAdjustForRow(drugId: string, branchId: string) {
     setAdjustForm((f) => ({ ...f, drugId, branchId }));
@@ -117,7 +152,7 @@ export default function InventoryPage({ params }: PageProps) {
           </p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" size="sm">
+          <Button variant="outline" size="sm" onClick={() => setShowTransfer(true)}>
             <ArrowRightLeft className="h-4 w-4 mr-2" />
             Transfer Stock
           </Button>
@@ -218,6 +253,92 @@ export default function InventoryPage({ params }: PageProps) {
               </Button>
               <Button type="submit" disabled={adjustMutation.isPending}>
                 {adjustMutation.isPending ? "Saving…" : "Apply Adjustment"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Transfer Stock Dialog */}
+      <Dialog open={showTransfer} onOpenChange={setShowTransfer}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Transfer Stock</DialogTitle>
+          </DialogHeader>
+          <form onSubmit={handleTransferSubmit} className="space-y-4 px-6 py-4">
+            <div className="space-y-1">
+              <Label htmlFor="tr-drug">Drug *</Label>
+              <select
+                id="tr-drug"
+                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
+                value={transferForm.drugId}
+                onChange={(e) => setTransferForm((f) => ({ ...f, drugId: e.target.value }))}
+              >
+                <option value="">Select drug…</option>
+                {drugs?.content?.map((d) => (
+                  <option key={d.id} value={d.id}>{d.name}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="space-y-1">
+              <Label htmlFor="tr-from">From branch *</Label>
+              <select
+                id="tr-from"
+                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
+                value={transferForm.fromBranchId}
+                onChange={(e) => setTransferForm((f) => ({ ...f, fromBranchId: e.target.value }))}
+              >
+                <option value="">Select source branch…</option>
+                {branches?.map((b) => (
+                  <option key={b.id} value={b.id}>{b.name}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="space-y-1">
+              <Label htmlFor="tr-to">To branch *</Label>
+              <select
+                id="tr-to"
+                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
+                value={transferForm.toBranchId}
+                onChange={(e) => setTransferForm((f) => ({ ...f, toBranchId: e.target.value }))}
+              >
+                <option value="">Select destination branch…</option>
+                {branches?.filter((b) => b.id !== transferForm.fromBranchId).map((b) => (
+                  <option key={b.id} value={b.id}>{b.name}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="space-y-1">
+              <Label htmlFor="tr-qty">Quantity *</Label>
+              <Input
+                id="tr-qty"
+                type="number"
+                min={1}
+                placeholder="e.g. 20"
+                value={transferForm.quantity || ""}
+                onChange={(e) => setTransferForm((f) => ({ ...f, quantity: Number(e.target.value) }))}
+              />
+            </div>
+
+            <div className="space-y-1">
+              <Label htmlFor="tr-ref">Reference</Label>
+              <Input
+                id="tr-ref"
+                placeholder="Optional reference or note…"
+                value={transferForm.reference ?? ""}
+                onChange={(e) => setTransferForm((f) => ({ ...f, reference: e.target.value }))}
+              />
+            </div>
+
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setShowTransfer(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={transferMutation.isPending}>
+                {transferMutation.isPending ? "Transferring…" : "Transfer"}
               </Button>
             </DialogFooter>
           </form>
