@@ -19,6 +19,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { formatQuantity, hasPacks, packInfo, packLabel, type PackInfo } from "@/lib/packs";
 import type { DrugResponse, SaleResponse, SaleSummaryResponse, SaleStatus, SalePaymentMethod, CreateSaleRequest } from "@/types";
 
 interface PageProps { params: Promise<{ pharmacyId: string }> }
@@ -26,6 +27,8 @@ interface PageProps { params: Promise<{ pharmacyId: string }> }
 interface CartItem {
   drugId: string; drugName: string;
   unitPrice: number; quantity: number; discountPct: number;
+  /** Quantity and unitPrice are per single unit (e.g. tablet); info lets the till also sell whole packs. */
+  info: PackInfo;
 }
 
 const PAYMENT_METHODS: SalePaymentMethod[] = ["Cash", "Card", "MobileMoney", "Insurance", "Credit"];
@@ -160,12 +163,13 @@ export default function SalesPage({ params }: PageProps) {
     return { subtotal: sub, totalDiscount: disc, netTotal: sub - disc };
   }, [cart]);
 
-  const addToCart = useCallback((drug: DrugResponse) => {
+  /** `units` is in single units; pass the pack size to add a whole pack. */
+  const addToCart = useCallback((drug: DrugResponse, units = 1) => {
     if (!branchId) { toast.error("Select a branch first"); return; }
     setCart((prev) => {
       const idx = prev.findIndex((i) => i.drugId === drug.id);
-      if (idx >= 0) { const n = [...prev]; n[idx] = { ...n[idx], quantity: n[idx].quantity + 1 }; return n; }
-      return [...prev, { drugId: drug.id, drugName: drug.name, unitPrice: drug.sellingPrice, quantity: 1, discountPct: 0 }];
+      if (idx >= 0) { const n = [...prev]; n[idx] = { ...n[idx], quantity: n[idx].quantity + units }; return n; }
+      return [...prev, { drugId: drug.id, drugName: drug.name, unitPrice: drug.sellingPrice, quantity: units, discountPct: 0, info: packInfo(drug) }];
     });
   }, [branchId]);
 
@@ -358,12 +362,15 @@ export default function SalesPage({ params }: PageProps) {
                   {drugs.map((drug) => {
                     const inCart = cart.find((i) => i.drugId === drug.id);
                     return (
-                      <button
+                      <div
                         key={drug.id}
+                        role="button"
+                        tabIndex={0}
                         onClick={() => addToCart(drug)}
-                        className={`group relative text-left rounded-xl border p-3 transition-all hover:shadow-md hover:border-primary focus:outline-none focus:ring-2 focus:ring-primary ${
-                          inCart ? "border-primary bg-primary/5" : "border-border bg-card hover:bg-accent/30"
-                        }`}
+                        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); addToCart(drug); } }}
+                        className={`group relative cursor-pointer text-left rounded-xl border p-3 transition-all hover:shadow-md hover:border-primary focus:outline-none focus:ring-2 focus:ring-primary ${
+                          hasPacks(packInfo(drug)) ? "pb-9" : ""
+                        } ${inCart ? "border-primary bg-primary/5" : "border-border bg-card hover:bg-accent/30"}`}
                       >
                         {inCart && (
                           <div className="absolute top-2 right-2 bg-primary text-primary-foreground text-[10px] font-bold rounded-full w-5 h-5 flex items-center justify-center">
@@ -377,6 +384,15 @@ export default function SalesPage({ params }: PageProps) {
                         {drug.genericName && <p className="text-[10px] text-muted-foreground truncate mb-1">{drug.genericName}</p>}
                         <p className="text-sm font-bold text-primary">TZS {fmt(drug.sellingPrice)}</p>
                         <p className="text-[10px] text-muted-foreground">per {drug.unit}</p>
+                        {hasPacks(packInfo(drug)) && (
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); addToCart(drug, drug.unitsPerPack); }}
+                            className="mt-1.5 w-full rounded-md border border-primary/40 py-0.5 text-[10px] font-medium text-primary hover:bg-primary/10"
+                          >
+                            + 1 {packLabel(packInfo(drug))} ({drug.unitsPerPack}) · TZS {fmt(drug.sellingPrice * drug.unitsPerPack)}
+                          </button>
+                        )}
                         {drug.requiresPrescription && (
                           <div className="flex items-center gap-1 mt-1">
                             <AlertCircle className="h-3 w-3 text-amber-500" />
@@ -386,7 +402,7 @@ export default function SalesPage({ params }: PageProps) {
                         <div className="absolute inset-x-0 bottom-0 flex items-center justify-center h-7 bg-primary/90 text-primary-foreground text-xs font-medium rounded-b-xl opacity-0 group-hover:opacity-100 transition-opacity">
                           <Plus className="h-3 w-3 mr-1" /> Add to Cart
                         </div>
-                      </button>
+                      </div>
                     );
                   })}
                 </div>
@@ -442,7 +458,12 @@ export default function SalesPage({ params }: PageProps) {
                   return (
                     <div key={item.drugId} className="rounded-lg border border-border bg-card p-2.5 space-y-2">
                       <div className="flex items-start justify-between gap-1">
-                        <p className="text-xs font-semibold leading-tight flex-1">{item.drugName}</p>
+                        <div className="flex-1">
+                          <p className="text-xs font-semibold leading-tight">{item.drugName}</p>
+                          {hasPacks(item.info) && (
+                            <p className="text-[10px] text-muted-foreground">{formatQuantity(item.quantity, item.info)}</p>
+                          )}
+                        </div>
                         <button onClick={() => setCart((p) => p.filter((i) => i.drugId !== item.drugId))} className="text-muted-foreground hover:text-destructive transition-colors">
                           <X className="h-3.5 w-3.5" />
                         </button>
@@ -463,6 +484,14 @@ export default function SalesPage({ params }: PageProps) {
                             <Plus className="h-3 w-3" />
                           </button>
                         </div>
+                        {hasPacks(item.info) && (
+                          <button
+                            className="rounded-md border border-input px-1.5 py-0.5 text-[10px] hover:bg-accent transition-colors whitespace-nowrap"
+                            onClick={() => updateQty(item.drugId, item.quantity + item.info.unitsPerPack)}
+                          >
+                            +{packLabel(item.info)}
+                          </button>
+                        )}
                         {/* Discount */}
                         <div className="flex items-center gap-1">
                           <span className="text-[10px] text-muted-foreground">Disc%</span>
@@ -476,7 +505,7 @@ export default function SalesPage({ params }: PageProps) {
                         <p className="text-xs font-bold text-primary ml-auto whitespace-nowrap">TZS {fmt(lineTotal)}</p>
                       </div>
                       <p className="text-[10px] text-muted-foreground">
-                        {fmt(item.unitPrice)} × {item.quantity}{item.discountPct > 0 ? ` − ${item.discountPct}% disc` : ""}
+                        {fmt(item.unitPrice)} × {item.quantity} {item.info.unit}{item.discountPct > 0 ? ` − ${item.discountPct}% disc` : ""}
                       </p>
                     </div>
                   );
