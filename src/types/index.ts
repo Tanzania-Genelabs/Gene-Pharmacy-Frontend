@@ -429,18 +429,16 @@ export interface StockTransferRequest {
   toBranchId: string;
   drugId: string;
   quantity: number;
-  notes?: string;
+  reference?: string;
 }
 
 export interface StockTransferResponse {
-  transferReference: string;
   pharmacyId: string;
   drugId: string;
   fromBranchId: string;
   toBranchId: string;
-  quantityTransferred: number;
-  fromBranchQuantityAfter: number;
-  toBranchQuantityAfter: number;
+  quantity: number;
+  reference: string | null;
   transferredAt: string;
 }
 
