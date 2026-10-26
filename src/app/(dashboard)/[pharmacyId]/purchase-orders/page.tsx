@@ -6,6 +6,8 @@ import { purchaseOrderApi } from "@/api/purchase-order.api";
 import { supplierApi } from "@/api/supplier.api";
 import { branchApi } from "@/api/branch.api";
 import { drugApi } from "@/api/drug.api";
+import { PackQuantityField } from "@/components/inventory/pack-quantity-field";
+import { formatQuantity, packInfo } from "@/lib/packs";
 import { toast } from "sonner";
 import { Plus, FileText, MoreHorizontal, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -254,7 +256,7 @@ export default function PurchaseOrdersPage({ params }: PageProps) {
             <div className="space-y-2">
               <Label>Order Items <span className="text-destructive">*</span></Label>
               <div className="grid grid-cols-12 gap-2 items-end">
-                <div className="col-span-5">
+                <div className="col-span-4">
                   <select
                     className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
                     value={lineItem.drugId}
@@ -266,18 +268,19 @@ export default function PurchaseOrdersPage({ params }: PageProps) {
                     ))}
                   </select>
                 </div>
-                <div className="col-span-2">
-                  <Input
-                    type="number" min={1} placeholder="Qty"
-                    value={lineItem.quantityOrdered || ""}
-                    onChange={(e) =>
-                      setLineItem((l) => ({ ...l, quantityOrdered: parseInt(e.target.value) || 1 }))
-                    }
+                <div className="col-span-3">
+                  <PackQuantityField
+                    key={lineItem.drugId}
+                    placeholder="Qty"
+                    info={packInfo(drugs?.content?.find((d) => d.id === lineItem.drugId))}
+                    value={lineItem.quantityOrdered}
+                    onChange={(units) => setLineItem((l) => ({ ...l, quantityOrdered: units }))}
                   />
                 </div>
                 <div className="col-span-3">
                   <Input
-                    type="number" min={0} step="0.01" placeholder="Unit Price (TZS)"
+                    type="number" min={0} step="0.01"
+                    placeholder={`Price per ${packInfo(drugs?.content?.find((d) => d.id === lineItem.drugId)).unit} (TZS)`}
                     value={lineItem.unitPrice || ""}
                     onChange={(e) =>
                       setLineItem((l) => ({ ...l, unitPrice: parseFloat(e.target.value) || 0 }))
@@ -294,13 +297,14 @@ export default function PurchaseOrdersPage({ params }: PageProps) {
               {form.items.length > 0 && (
                 <div className="border rounded-md divide-y max-h-44 overflow-y-auto text-sm">
                   {form.items.map((item, idx) => {
-                    const drugName = drugs?.content?.find((d) => d.id === item.drugId)?.name ?? item.drugId;
+                    const lineDrug = drugs?.content?.find((d) => d.id === item.drugId);
+                    const drugName = lineDrug?.name ?? item.drugId;
                     const total = item.quantityOrdered * item.unitPrice;
                     return (
                       <div key={idx} className="flex items-center justify-between px-3 py-2 gap-2">
                         <span className="font-medium truncate flex-1">{drugName}</span>
                         <span className="text-muted-foreground tabular-nums shrink-0">
-                          {item.quantityOrdered} × TZS {item.unitPrice.toLocaleString()}
+                          {formatQuantity(item.quantityOrdered, packInfo(lineDrug))} × TZS {item.unitPrice.toLocaleString()}
                           {" = "}
                           <strong>TZS {total.toLocaleString()}</strong>
                         </span>
