@@ -60,6 +60,8 @@ interface DrugForm {
   barcode: string;
   categoryId: string;
   unit: string;
+  unitsPerPack: string;
+  packUnit: string;
   sellingPrice: string;
   buyingPrice: string;
   reorderLevel: string;
@@ -68,6 +70,7 @@ interface DrugForm {
 
 const emptyForm = (): DrugForm => ({
   name: "", genericName: "", barcode: "", categoryId: "", unit: "tablet",
+  unitsPerPack: "1", packUnit: "",
   sellingPrice: "", buyingPrice: "", reorderLevel: "10", requiresPrescription: false,
 });
 
@@ -77,6 +80,8 @@ const formFromDrug = (drug: DrugResponse): DrugForm => ({
   barcode: drug.barcode ?? "",
   categoryId: drug.categoryId ?? "",
   unit: drug.unit,
+  unitsPerPack: String(drug.unitsPerPack ?? 1),
+  packUnit: drug.packUnit ?? "",
   sellingPrice: String(drug.sellingPrice),
   buyingPrice: drug.buyingPrice === null ? "" : String(drug.buyingPrice),
   reorderLevel: String(drug.reorderLevel),
@@ -160,6 +165,8 @@ export default function DrugsPage({ params }: PageProps) {
 
   const selling = Number(form.sellingPrice);
   const buying = form.buyingPrice.trim() === "" ? null : Number(form.buyingPrice);
+  const unitsPerPack = Number(form.unitsPerPack);
+  const sellsInPacks = Number.isInteger(unitsPerPack) && unitsPerPack > 1;
   const sellsBelowCost = buying !== null && Number.isFinite(selling) && Number.isFinite(buying) && selling < buying;
 
   function handleSubmit(e: React.FormEvent) {
@@ -177,6 +184,10 @@ export default function DrugsPage({ params }: PageProps) {
       toast.error("The buying price must be 0 or more (or left empty)");
       return;
     }
+    if (form.unitsPerPack.trim() === "" || !Number.isInteger(unitsPerPack) || unitsPerPack < 1) {
+      toast.error("Units per pack must be a whole number, 1 or more");
+      return;
+    }
     const reorder = Number(form.reorderLevel);
     if (form.reorderLevel.trim() === "" || !Number.isInteger(reorder) || reorder < 0) {
       toast.error("The reorder level must be a whole number, 0 or more");
@@ -186,6 +197,7 @@ export default function DrugsPage({ params }: PageProps) {
     const common = {
       name: form.name.trim(),
       unit: form.unit,
+      unitsPerPack,
       sellingPrice: selling,
       reorderLevel: reorder,
       requiresPrescription: form.requiresPrescription,
@@ -199,6 +211,7 @@ export default function DrugsPage({ params }: PageProps) {
           genericName: form.genericName.trim() || null,
           barcode: form.barcode.trim() || null,
           categoryId: form.categoryId || null,
+          packUnit: sellsInPacks ? form.packUnit.trim() || null : null,
           buyingPrice: buying,
         },
       });
@@ -209,6 +222,7 @@ export default function DrugsPage({ params }: PageProps) {
           genericName: form.genericName.trim() || undefined,
           barcode: form.barcode.trim() || undefined,
           categoryId: form.categoryId || undefined,
+          packUnit: sellsInPacks ? form.packUnit.trim() || undefined : undefined,
           buyingPrice: buying ?? undefined,
         } as CreateDrugRequest,
       });
@@ -327,6 +341,26 @@ export default function DrugsPage({ params }: PageProps) {
                 </select>
               </div>
             </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label htmlFor="d-upp">Units per pack *</Label>
+                <Input id="d-upp" type="number" min={1} step={1} value={form.unitsPerPack}
+                  onChange={(e) => setForm((f) => ({ ...f, unitsPerPack: e.target.value }))} />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="d-pack">Pack name</Label>
+                <Input id="d-pack" placeholder="e.g. box, strip" disabled={!sellsInPacks} value={form.packUnit}
+                  onChange={(e) => setForm((f) => ({ ...f, packUnit: e.target.value }))} />
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground -mt-2">
+              Prices and stock are counted per {form.unit}. Put 1 if this drug is not split.
+              {editing && " Changing this does not change existing stock counts."}
+              {sellsInPacks && Number.isFinite(selling) && form.sellingPrice.trim() !== "" && (
+                <> One {form.packUnit.trim() || "pack"} = {unitsPerPack} {form.unit} = TZS {(selling * unitsPerPack).toLocaleString()}
+                  {buying !== null && Number.isFinite(buying) && <> (cost TZS {(buying * unitsPerPack).toLocaleString()})</>}.</>
+              )}
+            </p>
             <div className="space-y-1">
               <Label htmlFor="d-barcode">Barcode</Label>
               <Input id="d-barcode" placeholder="optional" value={form.barcode}
@@ -334,12 +368,12 @@ export default function DrugsPage({ params }: PageProps) {
             </div>
             <div className="grid grid-cols-3 gap-3">
               <div className="space-y-1">
-                <Label htmlFor="d-sell">Selling Price (TZS) *</Label>
+                <Label htmlFor="d-sell">Selling Price per {form.unit} (TZS) *</Label>
                 <Input id="d-sell" type="number" min={0} step="any" inputMode="decimal" value={form.sellingPrice}
                   onChange={(e) => setForm((f) => ({ ...f, sellingPrice: e.target.value }))} />
               </div>
               <div className="space-y-1">
-                <Label htmlFor="d-buy">Buying Price (TZS)</Label>
+                <Label htmlFor="d-buy">Buying Price per {form.unit} (TZS)</Label>
                 <Input id="d-buy" type="number" min={0} step="any" inputMode="decimal" placeholder="optional" value={form.buyingPrice}
                   onChange={(e) => setForm((f) => ({ ...f, buyingPrice: e.target.value }))} />
               </div>
@@ -433,6 +467,12 @@ export default function DrugsPage({ params }: PageProps) {
                     <TableCell>{drug.categoryName ?? "—"}</TableCell>
                     <TableCell className="tabular-nums">
                       TZS {drug.sellingPrice.toLocaleString()}
+                      <span className="text-xs text-muted-foreground"> / {drug.unit}</span>
+                      {drug.unitsPerPack > 1 && (
+                        <div className="text-xs text-muted-foreground">
+                          {drug.packUnit ?? "pack"} of {drug.unitsPerPack}: TZS {(drug.sellingPrice * drug.unitsPerPack).toLocaleString()}
+                        </div>
+                      )}
                     </TableCell>
                     <TableCell>
                       <Badge variant={drug.active ? "default" : "secondary"}>
