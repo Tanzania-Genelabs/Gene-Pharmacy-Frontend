@@ -4,7 +4,7 @@ import { use, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { drugApi, drugCategoryApi } from "@/api/drug.api";
 import { toast } from "sonner";
-import { Plus, Search, Upload, RefreshCw, Pill, MoreHorizontal } from "lucide-react";
+import { Plus, Search, Upload, Pill, MoreHorizontal, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -23,12 +23,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -36,23 +31,65 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
-import type { CreateDrugRequest } from "@/types";
+import { apiErrorMessage } from "@/lib/errors";
+import type { CreateDrugRequest, DrugResponse, UpdateDrugRequest } from "@/types";
 
 interface PageProps {
   params: Promise<{ pharmacyId: string }>;
 }
+
+const selectClass =
+  "flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring";
+
+const UNIT_OPTIONS = [
+  { value: "tablet", label: "Tablet" },
+  { value: "capsule", label: "Capsule" },
+  { value: "syrup", label: "Syrup (ml)" },
+  { value: "injection", label: "Injection (vial)" },
+  { value: "cream", label: "Cream (g)" },
+  { value: "piece", label: "Piece" },
+  { value: "strip", label: "Strip" },
+];
+
+/** Form fields are text so they can be emptied while typing; they are converted on submit. */
+interface DrugForm {
+  name: string;
+  genericName: string;
+  barcode: string;
+  categoryId: string;
+  unit: string;
+  sellingPrice: string;
+  buyingPrice: string;
+  reorderLevel: string;
+  requiresPrescription: boolean;
+}
+
+const emptyForm = (): DrugForm => ({
+  name: "", genericName: "", barcode: "", categoryId: "", unit: "tablet",
+  sellingPrice: "", buyingPrice: "", reorderLevel: "10", requiresPrescription: false,
+});
+
+const formFromDrug = (drug: DrugResponse): DrugForm => ({
+  name: drug.name,
+  genericName: drug.genericName ?? "",
+  barcode: drug.barcode ?? "",
+  categoryId: drug.categoryId ?? "",
+  unit: drug.unit,
+  sellingPrice: String(drug.sellingPrice),
+  buyingPrice: drug.buyingPrice === null ? "" : String(drug.buyingPrice),
+  reorderLevel: String(drug.reorderLevel),
+  requiresPrescription: drug.requiresPrescription,
+});
 
 export default function DrugsPage({ params }: PageProps) {
   const { pharmacyId } = use(params);
   const qc = useQueryClient();
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
-  const [showAdd, setShowAdd] = useState(false);
-  const emptyDrug = (): CreateDrugRequest => ({
-    name: "", genericName: "", barcode: "", unit: "tablet",
-    sellingPrice: 0, buyingPrice: 0, reorderLevel: 10, requiresPrescription: false,
-  });
-  const [form, setForm] = useState<CreateDrugRequest>(emptyDrug());
+  // One dialog serves both: `editing` is the drug being changed, or null when adding a new one.
+  const [showForm, setShowForm] = useState(false);
+  const [editing, setEditing] = useState<DrugResponse | null>(null);
+  const [form, setForm] = useState<DrugForm>(emptyForm());
 
   const { data, isLoading } = useQuery({
     queryKey: ["drugs", pharmacyId, page, search],
@@ -60,24 +97,50 @@ export default function DrugsPage({ params }: PageProps) {
     placeholderData: (prev) => prev,
   });
 
-  const createMutation = useMutation({
-    mutationFn: (data: CreateDrugRequest) => drugApi.create(pharmacyId, data),
-    onSuccess: () => {
-      toast.success("Drug added successfully");
+  const { data: categories } = useQuery({
+    queryKey: ["drug-categories", pharmacyId],
+    queryFn: () => drugCategoryApi.list(pharmacyId),
+  });
+  const activeCategories = (categories ?? []).filter((c) => c.active || c.id === form.categoryId);
+
+  function closeForm() {
+    setShowForm(false);
+    setEditing(null);
+    setForm(emptyForm());
+  }
+
+  function openAdd() {
+    setEditing(null);
+    setForm(emptyForm());
+    setShowForm(true);
+  }
+
+  function openEdit(drug: DrugResponse) {
+    setEditing(drug);
+    setForm(formFromDrug(drug));
+    setShowForm(true);
+  }
+
+  const saveMutation = useMutation({
+    mutationFn: (payload: { create?: CreateDrugRequest; update?: UpdateDrugRequest }) =>
+      editing && payload.update
+        ? drugApi.update(pharmacyId, editing.id, payload.update)
+        : drugApi.create(pharmacyId, payload.create!),
+    onSuccess: (saved) => {
+      toast.success(editing ? `${saved.name} updated` : "Drug added successfully");
       qc.invalidateQueries({ queryKey: ["drugs", pharmacyId] });
-      setShowAdd(false);
-      setForm(emptyDrug());
+      closeForm();
     },
-    onError: () => toast.error("Failed to add drug"),
+    onError: (err: unknown) => toast.error(apiErrorMessage(err, editing ? "Failed to update drug" : "Failed to add drug")),
   });
 
   const deleteMutation = useMutation({
     mutationFn: (drugId: string) => drugApi.delete(pharmacyId, drugId),
     onSuccess: () => {
-      toast.success("Drug deleted successfully");
+      toast.success("Drug deactivated");
       qc.invalidateQueries({ queryKey: ["drugs", pharmacyId] });
     },
-    onError: () => toast.error("Failed to delete drug"),
+    onError: (err: unknown) => toast.error(apiErrorMessage(err, "Failed to deactivate drug")),
   });
 
   const reactivateMutation = useMutation({
@@ -86,16 +149,64 @@ export default function DrugsPage({ params }: PageProps) {
       toast.success("Drug reactivated");
       qc.invalidateQueries({ queryKey: ["drugs", pharmacyId] });
     },
-    onError: () => toast.error("Failed to reactivate drug"),
+    onError: (err: unknown) => toast.error(apiErrorMessage(err, "Failed to reactivate drug")),
   });
+
+  const selling = Number(form.sellingPrice);
+  const buying = form.buyingPrice.trim() === "" ? null : Number(form.buyingPrice);
+  const sellsBelowCost = buying !== null && Number.isFinite(selling) && Number.isFinite(buying) && selling < buying;
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+
     if (!form.name.trim() || !form.unit.trim()) {
       toast.error("Drug name and unit are required");
       return;
     }
-    createMutation.mutate(form);
+    if (form.sellingPrice.trim() === "" || !Number.isFinite(selling) || selling < 0) {
+      toast.error("Enter a selling price of 0 or more");
+      return;
+    }
+    if (buying !== null && (!Number.isFinite(buying) || buying < 0)) {
+      toast.error("The buying price must be 0 or more (or left empty)");
+      return;
+    }
+    const reorder = Number(form.reorderLevel);
+    if (form.reorderLevel.trim() === "" || !Number.isInteger(reorder) || reorder < 0) {
+      toast.error("The reorder level must be a whole number, 0 or more");
+      return;
+    }
+
+    const common = {
+      name: form.name.trim(),
+      unit: form.unit,
+      sellingPrice: selling,
+      reorderLevel: reorder,
+      requiresPrescription: form.requiresPrescription,
+    };
+
+    if (editing) {
+      // Optional details are sent as null when emptied, which clears them on the server.
+      saveMutation.mutate({
+        update: {
+          ...common,
+          genericName: form.genericName.trim() || null,
+          barcode: form.barcode.trim() || null,
+          categoryId: form.categoryId || null,
+          buyingPrice: buying,
+        },
+      });
+    } else {
+      saveMutation.mutate({
+        create: {
+          ...common,
+          genericName: form.genericName.trim() || undefined,
+          barcode: form.barcode.trim() || undefined,
+          categoryId: form.categoryId || undefined,
+          buyingPrice: buying ?? undefined,
+        } as CreateDrugRequest,
+      });
+    }
   }
 
   const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -132,18 +243,18 @@ export default function DrugsPage({ params }: PageProps) {
               </span>
             </Button>
           </label>
-          <Button size="sm" onClick={() => setShowAdd(true)}>
+          <Button size="sm" onClick={openAdd}>
             <Plus className="h-4 w-4 mr-2" />
             Add Drug
           </Button>
         </div>
       </div>
 
-      {/* Add Drug Dialog */}
-      <Dialog open={showAdd} onOpenChange={setShowAdd}>
-        <DialogContent className="sm:max-w-lg">
+      {/* Add / Edit Drug Dialog */}
+      <Dialog open={showForm} onOpenChange={(open) => (open ? setShowForm(true) : closeForm())}>
+        <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Add Drug</DialogTitle>
+            <DialogTitle>{editing ? `Edit ${editing.name}` : "Add Drug"}</DialogTitle>
           </DialogHeader>
           <form onSubmit={handleSubmit} className="space-y-4 px-6 py-4">
             <div className="space-y-1">
@@ -153,50 +264,66 @@ export default function DrugsPage({ params }: PageProps) {
             </div>
             <div className="space-y-1">
               <Label htmlFor="d-generic">Generic Name</Label>
-              <Input id="d-generic" placeholder="e.g. Acetaminophen" value={form.genericName ?? ""}
+              <Input id="d-generic" placeholder="e.g. Acetaminophen" value={form.genericName}
                 onChange={(e) => setForm((f) => ({ ...f, genericName: e.target.value }))} />
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1">
-                <Label htmlFor="d-unit">Unit *</Label>
-                <select
-                  id="d-unit"
-                  className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
-                  value={form.unit}
-                  onChange={(e) => setForm((f) => ({ ...f, unit: e.target.value }))}
-                >
-                  <option value="tablet">Tablet</option>
-                  <option value="capsule">Capsule</option>
-                  <option value="syrup">Syrup (ml)</option>
-                  <option value="injection">Injection (vial)</option>
-                  <option value="cream">Cream (g)</option>
-                  <option value="piece">Piece</option>
-                  <option value="strip">Strip</option>
+                <Label htmlFor="d-category">Category</Label>
+                <select id="d-category" className={selectClass} value={form.categoryId}
+                  onChange={(e) => setForm((f) => ({ ...f, categoryId: e.target.value }))}>
+                  <option value="">No category</option>
+                  {activeCategories.map((c) => (
+                    <option key={c.id} value={c.id}>{c.name}{c.active ? "" : " (inactive)"}</option>
+                  ))}
                 </select>
               </div>
               <div className="space-y-1">
-                <Label htmlFor="d-barcode">Barcode</Label>
-                <Input id="d-barcode" placeholder="optional" value={form.barcode ?? ""}
-                  onChange={(e) => setForm((f) => ({ ...f, barcode: e.target.value }))} />
+                <Label htmlFor="d-unit">Unit *</Label>
+                <select id="d-unit" className={selectClass} value={form.unit}
+                  onChange={(e) => setForm((f) => ({ ...f, unit: e.target.value }))}>
+                  {/* A drug saved with a unit that isn't in the standard list must still show it. */}
+                  {!UNIT_OPTIONS.some((u) => u.value === form.unit) && <option value={form.unit}>{form.unit}</option>}
+                  {UNIT_OPTIONS.map((u) => (
+                    <option key={u.value} value={u.value}>{u.label}</option>
+                  ))}
+                </select>
               </div>
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="d-barcode">Barcode</Label>
+              <Input id="d-barcode" placeholder="optional" value={form.barcode}
+                onChange={(e) => setForm((f) => ({ ...f, barcode: e.target.value }))} />
             </div>
             <div className="grid grid-cols-3 gap-3">
               <div className="space-y-1">
                 <Label htmlFor="d-sell">Selling Price (TZS) *</Label>
-                <Input id="d-sell" type="number" min={0} step={1} value={form.sellingPrice}
-                  onChange={(e) => setForm((f) => ({ ...f, sellingPrice: Number(e.target.value) }))} />
+                <Input id="d-sell" type="number" min={0} step="any" inputMode="decimal" value={form.sellingPrice}
+                  onChange={(e) => setForm((f) => ({ ...f, sellingPrice: e.target.value }))} />
               </div>
               <div className="space-y-1">
-                <Label htmlFor="d-buy">Buying Price (TZS) *</Label>
-                <Input id="d-buy" type="number" min={0} step={1} value={form.buyingPrice}
-                  onChange={(e) => setForm((f) => ({ ...f, buyingPrice: Number(e.target.value) }))} />
+                <Label htmlFor="d-buy">Buying Price (TZS)</Label>
+                <Input id="d-buy" type="number" min={0} step="any" inputMode="decimal" placeholder="optional" value={form.buyingPrice}
+                  onChange={(e) => setForm((f) => ({ ...f, buyingPrice: e.target.value }))} />
               </div>
               <div className="space-y-1">
-                <Label htmlFor="d-reorder">Reorder Level</Label>
+                <Label htmlFor="d-reorder">Reorder Level *</Label>
                 <Input id="d-reorder" type="number" min={0} step={1} value={form.reorderLevel}
-                  onChange={(e) => setForm((f) => ({ ...f, reorderLevel: Number(e.target.value) }))} />
+                  onChange={(e) => setForm((f) => ({ ...f, reorderLevel: e.target.value }))} />
               </div>
             </div>
+            {sellsBelowCost && (
+              <p className="flex items-start gap-2 rounded-md border border-yellow-500/40 bg-yellow-500/10 p-2 text-xs text-yellow-700 dark:text-yellow-400">
+                <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+                The selling price is lower than the buying price, so every sale of this drug loses money.
+              </p>
+            )}
+            {editing && (
+              <p className="text-xs text-muted-foreground">
+                Price changes apply to new sales only; past receipts keep the price they were sold at. Every change is
+                recorded in the audit log.
+              </p>
+            )}
             <div className="flex items-center gap-2">
               <input
                 id="d-prescription"
@@ -208,11 +335,11 @@ export default function DrugsPage({ params }: PageProps) {
               <Label htmlFor="d-prescription">Requires Prescription</Label>
             </div>
             <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => setShowAdd(false)}>
+              <Button type="button" variant="outline" onClick={closeForm}>
                 Cancel
               </Button>
-              <Button type="submit" disabled={createMutation.isPending}>
-                {createMutation.isPending ? "Adding…" : "Add Drug"}
+              <Button type="submit" disabled={saveMutation.isPending}>
+                {saveMutation.isPending ? "Saving…" : editing ? "Save changes" : "Add Drug"}
               </Button>
             </DialogFooter>
           </form>
@@ -283,7 +410,7 @@ export default function DrugsPage({ params }: PageProps) {
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
-                          <DropdownMenuItem>Edit</DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => openEdit(drug)}>Edit</DropdownMenuItem>
                           {drug.active ? (
                             <DropdownMenuItem
                               className="text-destructive"
