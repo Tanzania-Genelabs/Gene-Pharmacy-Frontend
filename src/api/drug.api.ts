@@ -10,18 +10,32 @@ import type {
   UpdateCategoryRequest,
 } from "@/types";
 
+/**
+ * The server sends prices as exact decimal strings ("2500.00"). The screens do arithmetic and number
+ * formatting on them, so convert once here instead of in every component.
+ */
+function normalizeDrug(drug: DrugResponse): DrugResponse {
+  return {
+    ...drug,
+    sellingPrice: Number(drug.sellingPrice),
+    buyingPrice: drug.buyingPrice === null || drug.buyingPrice === undefined ? null : Number(drug.buyingPrice),
+  };
+}
+
 export const drugApi = {
   create: (pharmacyId: string, data: CreateDrugRequest) =>
-    api.post<DrugResponse>(`/api/v1/pharmacies/${pharmacyId}/drugs`, data).then((r) => r.data),
+    api.post<DrugResponse>(`/api/v1/pharmacies/${pharmacyId}/drugs`, data).then((r) => normalizeDrug(r.data)),
 
   list: (pharmacyId: string, params?: { page?: number; size?: number; search?: string }) =>
-    api.get<Page<DrugResponse>>(`/api/v1/pharmacies/${pharmacyId}/drugs`, { params }).then((r) => r.data),
+    api
+      .get<Page<DrugResponse>>(`/api/v1/pharmacies/${pharmacyId}/drugs`, { params })
+      .then((r) => ({ ...r.data, content: r.data.content.map(normalizeDrug) })),
 
   getById: (pharmacyId: string, drugId: string) =>
-    api.get<DrugResponse>(`/api/v1/pharmacies/${pharmacyId}/drugs/${drugId}`).then((r) => r.data),
+    api.get<DrugResponse>(`/api/v1/pharmacies/${pharmacyId}/drugs/${drugId}`).then((r) => normalizeDrug(r.data)),
 
   update: (pharmacyId: string, drugId: string, data: UpdateDrugRequest) =>
-    api.put<DrugResponse>(`/api/v1/pharmacies/${pharmacyId}/drugs/${drugId}`, data).then((r) => r.data),
+    api.put<DrugResponse>(`/api/v1/pharmacies/${pharmacyId}/drugs/${drugId}`, data).then((r) => normalizeDrug(r.data)),
 
   delete: (pharmacyId: string, drugId: string) =>
     api.delete(`/api/v1/pharmacies/${pharmacyId}/drugs/${drugId}`).then((r) => r.data),
