@@ -236,7 +236,7 @@ export default function BillingPage({ params }: PageProps) {
                 <TableHead>Date</TableHead>
                 <TableHead>Plan</TableHead>
                 <TableHead className="text-right">Amount</TableHead>
-                <TableHead>Network</TableHead>
+                <TableHead>Paid by</TableHead>
                 <TableHead>Reference</TableHead>
                 <TableHead>Status</TableHead>
               </TableRow>
@@ -248,8 +248,10 @@ export default function BillingPage({ params }: PageProps) {
                   <TableCell>
                     {p.planType} · {p.months} {p.months === 1 ? "month" : "months"}
                   </TableCell>
-                  <TableCell className="text-right font-semibold">{money(p.amount)}</TableCell>
-                  <TableCell>{p.channel ?? "—"}</TableCell>
+                  <TableCell className="text-right font-semibold">{p.method === "Promotion" ? "Free" : money(p.amount)}</TableCell>
+                  <TableCell>
+                    {p.method === "Cash" ? "Cash" : p.method === "Promotion" ? "Promotion" : p.channel ?? "Mobile money"}
+                  </TableCell>
                   <TableCell className="font-mono text-xs">{p.internalReference}</TableCell>
                   <TableCell>
                     <Badge variant={PAYMENT_BADGE[p.status]}>{p.status}</Badge>
