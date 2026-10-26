@@ -4,6 +4,7 @@ import axios, {
   InternalAxiosRequestConfig,
 } from "axios";
 import { tokenStore } from "@/lib/tokens";
+import { sessionClient } from "@/lib/session-client";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -69,15 +70,10 @@ api.interceptors.response.use(
     isRefreshing = true;
 
     try {
-      const refreshToken = tokenStore.getRefreshToken();
-      if (!refreshToken) throw new Error("No refresh token");
-
-      const { data } = await axios.post(`${API_URL}/api/v1/auth/refresh`, {
-        refreshToken,
-      });
+      // The httpOnly refresh cookie is sent automatically; JavaScript never handles the token.
+      const data = await sessionClient.refresh();
 
       tokenStore.setAccessToken(data.accessToken);
-      tokenStore.setRefreshToken(data.refreshToken);
       processQueue(null, data.accessToken);
 
       if (originalRequest.headers) {
@@ -86,10 +82,12 @@ api.interceptors.response.use(
       return api(originalRequest);
     } catch (refreshError) {
       processQueue(refreshError as AxiosError, null);
-      tokenStore.clearAll();
-      // Redirect to login
-      if (typeof window !== "undefined") {
-        window.location.href = "/login";
+      // Only a rejected session (401) means "sign in again"; an outage (503/network) keeps the cookie.
+      if ((refreshError as AxiosError).response?.status === 401) {
+        tokenStore.clearAll();
+        if (typeof window !== "undefined") {
+          window.location.href = "/login";
+        }
       }
       return Promise.reject(refreshError);
     } finally {
