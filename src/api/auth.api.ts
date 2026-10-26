@@ -1,19 +1,17 @@
 import api from "@/lib/api";
-import { tokenStore } from "@/lib/tokens";
-import type { AuthResponse, LoginRequest, RefreshTokenRequest, RegisterRequest, OwnerRegistrationRequest } from "@/types";
+import { sessionClient } from "@/lib/session-client";
+import type { AuthResponse, LoginRequest, RegisterRequest, OwnerRegistrationRequest } from "@/types";
 
 export const authApi = {
-  login: (data: LoginRequest) =>
-    api.post<AuthResponse>("/api/v1/auth/login", data).then((r) => r.data),
+  /** Signs in through the Next.js session proxy, which keeps the refresh token in an httpOnly cookie. */
+  login: (data: LoginRequest) => sessionClient.login(data),
 
-  refresh: (data: RefreshTokenRequest) =>
-    api.post<AuthResponse>("/api/v1/auth/refresh", data).then((r) => r.data),
+  /** Restores the session from the httpOnly cookie (no token is passed from JavaScript). */
+  refresh: () => sessionClient.refresh(),
 
-  logout: () => {
-    const refreshToken = tokenStore.getRefreshToken();
-    return api.post("/api/v1/auth/logout", { refreshToken }).then((r) => r.data);
-  },
+  logout: () => sessionClient.logout(),
 
+  /** SuperAdmin only. Staff accounts are created through the pharmacy users API. */
   register: (data: RegisterRequest) =>
     api.post<AuthResponse>("/api/v1/auth/register", data).then((r) => r.data),
 
