@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { apiErrorMessage } from "@/lib/errors";
 import type { AdminBillingPlan, BillingPlan } from "@/types";
 
 const money = (value: string | number) => `TZS ${Number(value).toLocaleString()}`;
@@ -17,24 +18,35 @@ const money = (value: string | number) => `TZS ${Number(value).toLocaleString()}
 /** One editable row: keeps its own draft so typing doesn't refetch the whole table. */
 function PlanRow({ plan }: { plan: AdminBillingPlan }) {
   const qc = useQueryClient();
-  const [price, setPrice] = useState(plan.monthlyPrice);
+  const [monthly, setMonthly] = useState(plan.monthlyPrice);
+  const [weekly, setWeekly] = useState(plan.weeklyPrice ?? "");
   const [active, setActive] = useState(plan.active);
 
-  const priceNumber = Number(price);
-  const priceValid = Number.isInteger(priceNumber) && priceNumber >= 1;
-  const dirty = price !== plan.monthlyPrice || active !== plan.active;
+  const monthlyNumber = Number(monthly);
+  const monthlyValid = Number.isInteger(monthlyNumber) && monthlyNumber >= 1;
+  // Weekly is optional: empty means "not sold weekly".
+  const weeklyNumber = Number(weekly);
+  const weeklyValid = weekly.trim() === "" || (Number.isInteger(weeklyNumber) && weeklyNumber >= 1);
+  const dirty = monthly !== plan.monthlyPrice || weekly !== (plan.weeklyPrice ?? "") || active !== plan.active;
+
+  // What 4 weeks costs compared with a month: shown so you can see the premium paid for flexibility.
+  const fourWeeks = weekly.trim() !== "" && weeklyValid ? weeklyNumber * 4 : null;
+  const premiumPct = fourWeeks !== null && monthlyValid ? Math.round(((fourWeeks - monthlyNumber) / monthlyNumber) * 100) : null;
 
   const save = useMutation({
     mutationFn: () =>
-      adminBillingPlanApi.update(plan.planType as BillingPlan, { monthlyPrice: priceNumber, active }),
+      adminBillingPlanApi.update(plan.planType as BillingPlan, {
+        monthlyPrice: monthlyNumber,
+        weeklyPrice: weekly.trim() === "" ? null : weeklyNumber,
+        active,
+      }),
     onSuccess: (saved) => {
-      toast.success(`${saved.planType}: ${money(saved.monthlyPrice)} per month, ${saved.active ? "on sale" : "switched off"}`);
+      toast.success(
+        `${saved.planType}: ${money(saved.monthlyPrice)} per month, ${saved.weeklyPrice ? `${money(saved.weeklyPrice)} per week` : "not sold weekly"}, ${saved.active ? "on sale" : "switched off"}`,
+      );
       qc.invalidateQueries({ queryKey: ["admin", "billing-plans"] });
     },
-    onError: (err: unknown) => {
-      const msg = (err as { response?: { data?: { message?: string; violations?: { message: string }[] } } })?.response?.data;
-      toast.error(msg?.violations?.[0]?.message ?? msg?.message ?? "Could not save the plan");
-    },
+    onError: (err: unknown) => toast.error(apiErrorMessage(err, "Could not save the plan")),
   });
 
   return (
@@ -48,13 +60,35 @@ function PlanRow({ plan }: { plan: AdminBillingPlan }) {
             min={1}
             step={1}
             inputMode="numeric"
-            aria-label={`${plan.planType} monthly price`}
-            value={price}
-            onChange={(e) => setPrice(e.target.value)}
-            className={priceValid ? "" : "border-destructive"}
+            aria-label={`${plan.planType} weekly price`}
+            placeholder="not sold weekly"
+            value={weekly}
+            onChange={(e) => setWeekly(e.target.value)}
+            className={weeklyValid ? "" : "border-destructive"}
           />
         </div>
-        {!priceValid && <p className="text-xs text-destructive mt-1">Whole shillings, at least 1</p>}
+        {!weeklyValid && <p className="text-xs text-destructive mt-1">Whole shillings, at least 1 (or empty)</p>}
+      </TableCell>
+      <TableCell>
+        <div className="flex items-center gap-2 max-w-56">
+          <span className="text-sm text-muted-foreground">TZS</span>
+          <Input
+            type="number"
+            min={1}
+            step={1}
+            inputMode="numeric"
+            aria-label={`${plan.planType} monthly price`}
+            value={monthly}
+            onChange={(e) => setMonthly(e.target.value)}
+            className={monthlyValid ? "" : "border-destructive"}
+          />
+        </div>
+        {!monthlyValid && <p className="text-xs text-destructive mt-1">Whole shillings, at least 1</p>}
+        {premiumPct !== null && (
+          <p className="text-xs text-muted-foreground mt-1">
+            4 weeks = {money(fourWeeks!)} ({premiumPct > 0 ? `${premiumPct}% more than a month` : premiumPct < 0 ? `${-premiumPct}% LESS than a month` : "same as a month"})
+          </p>
+        )}
       </TableCell>
       <TableCell>
         <label className="inline-flex items-center gap-2 text-sm cursor-pointer">
@@ -79,7 +113,7 @@ function PlanRow({ plan }: { plan: AdminBillingPlan }) {
         )}
       </TableCell>
       <TableCell className="text-right">
-        <Button size="sm" disabled={!dirty || !priceValid || save.isPending} onClick={() => save.mutate()}>
+        <Button size="sm" disabled={!dirty || !monthlyValid || !weeklyValid || save.isPending} onClick={() => save.mutate()}>
           {save.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save"}
         </Button>
       </TableCell>
@@ -103,12 +137,15 @@ export default function AdminBillingPlansPage() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
-            <Banknote className="h-4 w-4" /> Monthly price per plan
+            <Banknote className="h-4 w-4" /> Price per plan
           </CardTitle>
           <CardDescription>
-            A change applies to payments started afterwards; a payment already waiting for approval keeps the price it
-            was created with. Switching a plan off hides it from pharmacies but does not affect those already on it.
-            Pharmacies choose 1, 3, 6 or 12 months and pay the monthly price times the number of months.
+            Pharmacies can pay <strong>weekly</strong> (1 to 4 weeks at a time) or <strong>monthly</strong> (1 to 12 months at a time).
+            They pay the weekly price times the number of weeks, or the monthly price times the number of months. Price a week a
+            little higher than a quarter of the month, so weekly is a convenience and monthly stays the better deal. Leave the
+            weekly price empty to sell a plan only monthly. A change applies to payments started afterwards; a payment already
+            waiting for approval keeps the price it was created with. Switching a plan off hides it from pharmacies but does not
+            affect those already on it.
           </CardDescription>
         </CardHeader>
         <CardContent className="p-0">
@@ -116,6 +153,7 @@ export default function AdminBillingPlansPage() {
             <TableHeader>
               <TableRow>
                 <TableHead>Plan</TableHead>
+                <TableHead>Weekly price</TableHead>
                 <TableHead>Monthly price</TableHead>
                 <TableHead>Availability</TableHead>
                 <TableHead>Last changed by</TableHead>
@@ -125,7 +163,7 @@ export default function AdminBillingPlansPage() {
             <TableBody>
               {isLoading && (
                 <TableRow>
-                  <TableCell colSpan={5} className="text-center text-muted-foreground py-8">
+                  <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
                     <Loader2 className="h-5 w-5 animate-spin inline mr-2" />
                     Loading…
                   </TableCell>
@@ -133,7 +171,7 @@ export default function AdminBillingPlansPage() {
               )}
               {/* key includes the saved values so a row resets its draft after a successful save */}
               {plans?.map((plan) => (
-                <PlanRow key={`${plan.planType}-${plan.monthlyPrice}-${plan.active}`} plan={plan} />
+                <PlanRow key={`${plan.planType}-${plan.monthlyPrice}-${plan.weeklyPrice}-${plan.active}`} plan={plan} />
               ))}
             </TableBody>
           </Table>
