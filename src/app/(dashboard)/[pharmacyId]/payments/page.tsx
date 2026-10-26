@@ -1,9 +1,8 @@
 "use client";
 
-import { use, useState } from "react";
+import { use, useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { paymentApi } from "@/api/payment.api";
-import { branchApi } from "@/api/branch.api";
 import { toast } from "sonner";
 import {
   CreditCard,
@@ -12,6 +11,7 @@ import {
   CheckCircle2,
   XCircle,
   Clock,
+  Loader2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -66,10 +66,24 @@ export default function PaymentsPage({ params }: PageProps) {
   const qc = useQueryClient();
   const [page, setPage] = useState(0);
   const [showInitiate, setShowInitiate] = useState(false);
+  const [trackedId, setTrackedId] = useState<string | null>(null);
+
+  // Polls every 3s while the customer is entering their PIN; the server throttles calls to ClickPesa.
+  const { data: tracked } = useQuery({
+    queryKey: ["payment", pharmacyId, trackedId],
+    queryFn: () => paymentApi.getById(pharmacyId, trackedId!),
+    enabled: !!trackedId,
+    refetchInterval: (query) => (query.state.data && query.state.data.status !== "Pending" ? false : 3000),
+  });
+
+  useEffect(() => {
+    if (tracked && tracked.status !== "Pending") {
+      qc.invalidateQueries({ queryKey: ["payments", pharmacyId] });
+    }
+  }, [tracked, qc, pharmacyId]);
 
   const emptyForm = (): InitiatePaymentRequest => ({
-    branchId: "",
-    provider: "Mpesa" as PaymentProvider,
+    provider: "ClickPesa" as PaymentProvider,
     amount: 0,
     phoneNumber: "",
   });
@@ -81,19 +95,17 @@ export default function PaymentsPage({ params }: PageProps) {
     placeholderData: (prev) => prev,
   });
 
-  const { data: branches } = useQuery({
-    queryKey: ["branches", pharmacyId],
-    queryFn: () => branchApi.list(pharmacyId),
-    enabled: showInitiate,
-  });
-
   const initiateMutation = useMutation({
     mutationFn: (data: InitiatePaymentRequest) => paymentApi.initiate(pharmacyId, data),
-    onSuccess: () => {
-      toast.success("Payment initiated — awaiting confirmation");
+    onSuccess: (payment) => {
       qc.invalidateQueries({ queryKey: ["payments", pharmacyId] });
       setShowInitiate(false);
       setForm(emptyForm());
+      if (payment.status === "Completed") {
+        toast.success("Payment recorded");
+      } else {
+        setTrackedId(payment.id); // customer now has a prompt on their phone: watch it live
+      }
     },
     onError: (err: unknown) => {
       const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
@@ -103,14 +115,21 @@ export default function PaymentsPage({ params }: PageProps) {
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!form.branchId || !form.amount) {
-      toast.error("Branch and amount are required");
+    if (!form.amount || form.amount <= 0) {
+      toast.error("Enter the amount to collect");
+      return;
+    }
+    if (form.provider !== "Cash" && !form.phoneNumber?.trim()) {
+      toast.error("Enter the customer's mobile number");
       return;
     }
     initiateMutation.mutate(form);
   }
 
-  const providers: PaymentProvider[] = ["Mpesa", "TigoPesa", "AirtelMoney", "HaloPesa", "Cash", "Card"];
+  const providers: { value: PaymentProvider; label: string }[] = [
+    { value: "ClickPesa", label: "Mobile money (M-Pesa, Tigo Pesa, Airtel Money, Halopesa)" },
+    { value: "Cash", label: "Cash" },
+  ];
 
   return (
     <div className="space-y-6">
@@ -135,25 +154,13 @@ export default function PaymentsPage({ params }: PageProps) {
           </DialogHeader>
           <form onSubmit={handleSubmit} className="space-y-4 px-6 py-4">
             <div className="space-y-1">
-              <Label htmlFor="p-branch">Branch *</Label>
-              <select id="p-branch"
-                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
-                value={form.branchId}
-                onChange={(e) => setForm((f) => ({ ...f, branchId: e.target.value }))}>
-                <option value="">Select branch…</option>
-                {branches?.map((b) => (
-                  <option key={b.id} value={b.id}>{b.name}</option>
-                ))}
-              </select>
-            </div>
-            <div className="space-y-1">
-              <Label htmlFor="p-provider">Payment Provider *</Label>
+              <Label htmlFor="p-provider">Payment method *</Label>
               <select id="p-provider"
                 className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
                 value={form.provider}
                 onChange={(e) => setForm((f) => ({ ...f, provider: e.target.value as PaymentProvider }))}>
                 {providers.map((p) => (
-                  <option key={p} value={p}>{p}</option>
+                  <option key={p.value} value={p.value}>{p.label}</option>
                 ))}
               </select>
             </div>
@@ -162,18 +169,64 @@ export default function PaymentsPage({ params }: PageProps) {
               <Input id="p-amount" type="number" min={1} value={form.amount}
                 onChange={(e) => setForm((f) => ({ ...f, amount: Number(e.target.value) }))} />
             </div>
+            {form.provider !== "Cash" && (
             <div className="space-y-1">
-              <Label htmlFor="p-phone">Customer Phone</Label>
-              <Input id="p-phone" placeholder="+255 7XX XXX XXX"
+              <Label htmlFor="p-phone">Customer mobile number *</Label>
+              <Input id="p-phone" placeholder="0712 345 678"
                 value={form.phoneNumber ?? ""}
                 onChange={(e) => setForm((f) => ({ ...f, phoneNumber: e.target.value }))} />
+              <p className="text-xs text-muted-foreground">
+                The customer receives a prompt on this phone and enters their mobile-money PIN to approve.
+              </p>
             </div>
+            )}
             <DialogFooter>
               <Button type="submit" disabled={initiateMutation.isPending}>
                 {initiateMutation.isPending ? "Processing…" : "Send Payment Request"}
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Live status while the customer approves on their phone */}
+      <Dialog open={!!trackedId} onOpenChange={(open) => !open && setTrackedId(null)}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>
+              {!tracked || tracked.status === "Pending"
+                ? "Waiting for the customer…"
+                : tracked.status === "Completed"
+                  ? "Payment received"
+                  : "Payment not completed"}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="flex flex-col items-center gap-3 px-6 py-6 text-center">
+            {!tracked || tracked.status === "Pending" ? (
+              <>
+                <Loader2 className="h-10 w-10 animate-spin text-muted-foreground" />
+                <p className="text-sm text-muted-foreground">
+                  A payment prompt was sent to {tracked?.phoneNumber ?? "the customer's phone"}. Ask them to
+                  enter their mobile-money PIN to approve TZS {Number(tracked?.amount ?? 0).toLocaleString()}.
+                </p>
+              </>
+            ) : tracked.status === "Completed" ? (
+              <>
+                <CheckCircle2 className="h-10 w-10 text-green-600" />
+                <p className="text-sm">TZS {Number(tracked.amount).toLocaleString()} received via {tracked.channel ?? "mobile money"}.</p>
+              </>
+            ) : (
+              <>
+                <XCircle className="h-10 w-10 text-destructive" />
+                <p className="text-sm text-muted-foreground">{tracked.failureReason ?? "The customer did not approve the payment."}</p>
+              </>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setTrackedId(null)}>
+              {tracked && tracked.status !== "Pending" ? "Close" : "Close (it will update in the list)"}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -198,11 +251,11 @@ export default function PaymentsPage({ params }: PageProps) {
                   <TableCell>
                     <div className="flex items-center gap-2">
                       {providerIcon(p.provider)}
-                      {p.provider}
+                      {p.channel ?? p.provider}
                     </div>
                   </TableCell>
                   <TableCell className="text-right font-semibold">
-                    TZS {p.amount.toLocaleString()}
+                    TZS {Number(p.amount).toLocaleString()}
                   </TableCell>
                   <TableCell>{p.phoneNumber ?? "—"}</TableCell>
                   <TableCell>{statusBadge(p.status)}</TableCell>
