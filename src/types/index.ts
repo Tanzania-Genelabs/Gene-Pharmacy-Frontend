@@ -1038,12 +1038,16 @@ export interface BillingOverview {
   paymentsEnabled: boolean;
 }
 
+/** How a subscription was paid: mobile money in the app, cash recorded by Gene Pharmacy, or a free promotion. */
+export type PaymentMethod = "ClickPesa" | "Cash" | "Promotion";
+
 export interface SubscriptionPaymentResponse {
   id: string;
   pharmacyId: string;
   purpose: "Subscription" | null;
   planType: BillingPlan | null;
   months: number | null;
+  method: PaymentMethod | null;
   /** Mobile network chosen by ClickPesa, e.g. "TIGO-PESA". */
   channel: string | null;
   status: PaymentStatus;
@@ -1055,6 +1059,50 @@ export interface SubscriptionPaymentResponse {
   failureReason: string | null;
   createdAt: string;
   completedAt: string | null;
+}
+
+/** A payment as the SuperAdmin sees it: with the pharmacy, who recorded it, and any private note. */
+export interface AdminPaymentResponse extends SubscriptionPaymentResponse {
+  pharmacyName: string | null;
+  /** Receipt / reference written down when the entry was made. */
+  externalReference: string | null;
+  note: string | null;
+  recordedBy: string | null;
+}
+
+export interface AdminPaymentSummary {
+  from: string;
+  to: string;
+  /** Whole TZS actually received (cash + mobile money). Promotions are free and failed/voided entries do not count. */
+  received: string;
+  completedCount: number;
+  byMethod: { method: PaymentMethod; count: number; total: string }[];
+  pendingCount: number;
+  failedCount: number;
+  voidedCount: number;
+}
+
+/** A subscription row on the SuperAdmin list, with the pharmacy's name and what it has paid. */
+export interface AdminSubscriptionRow extends SubscriptionResponse {
+  pharmacyName: string | null;
+  payments: {
+    totalPaid: string;
+    paymentCount: number;
+    lastPayment: { method: PaymentMethod; amount: string; planType: BillingPlan | null; months: number | null; at: string | null } | null;
+  };
+}
+
+export interface GrantAccessRequest {
+  pharmacyId: string;
+  kind: "Cash" | "Promotion";
+  planType: BillingPlan;
+  months: number;
+  /** Cash only. Leave out to use the plan's list price for that many months. */
+  amount?: number;
+  /** Receipt number for cash. */
+  reference?: string;
+  /** Required for a promotion (why); optional for cash. Private to Gene Pharmacy staff. */
+  note?: string;
 }
 
 export interface PayForSubscriptionRequest {
