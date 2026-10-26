@@ -26,10 +26,6 @@ export interface LoginRequest {
   password: string;
 }
 
-export interface RefreshTokenRequest {
-  refreshToken: string;
-}
-
 export interface RegisterRequest {
   email: string;
   password: string;
@@ -75,7 +71,6 @@ export interface AdminUpdateUserRequest {
 
 export interface AuthResponse {
   accessToken: string;
-  refreshToken: string;
   tokenType: string;
   expiresIn: number;
   user: UserSummary;
@@ -961,27 +956,35 @@ export interface BranchScorecardResponse {
 
 // ─── Payment ──────────────────────────────────────────────────────────────────
 
-export type PaymentProvider = "Mpesa" | "TigoPesa" | "AirtelMoney" | "HaloPesa" | "Cash" | "Card";
+// "ClickPesa" = mobile money collected through ClickPesa (the network is detected from the phone number).
+// The network names are kept for older records.
+export type PaymentProvider = "ClickPesa" | "Mpesa" | "TigoPesa" | "AirtelMoney" | "HaloPesa" | "Cash" | "Card";
 export type PaymentStatus = "Pending" | "Completed" | "Failed" | "Cancelled" | "Reversed";
 
 export interface PaymentTransactionResponse {
   id: string;
   pharmacyId: string;
-  branchId: string;
+  branchId: string | null;
   saleId: string | null;
   provider: PaymentProvider;
+  /** Payment gateway; null for cash and for legacy simulated records. */
+  gateway: string | null;
+  /** Mobile network chosen by the gateway, e.g. "TIGO-PESA". */
+  channel: string | null;
   status: PaymentStatus;
-  amount: number;
+  /** Decimal string, e.g. "5000.00". */
+  amount: string;
   currency: string;
   phoneNumber: string | null;
   externalReference: string | null;
   internalReference: string;
+  failureReason: string | null;
   createdAt: string;
   completedAt: string | null;
 }
 
 export interface InitiatePaymentRequest {
-  branchId: string;
+  branchId?: string;
   saleId?: string;
   provider: PaymentProvider;
   amount: number;
