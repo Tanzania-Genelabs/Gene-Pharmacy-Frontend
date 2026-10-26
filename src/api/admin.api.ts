@@ -123,7 +123,7 @@ export const adminBillingPlanApi = {
     api.get<AdminBillingPlan[]>("/api/v1/admin/billing-plans").then((r) => r.data),
 
   /** Changes a plan's monthly price (whole TZS) and/or whether it can be bought. */
-  update: (planType: BillingPlan, data: { monthlyPrice?: number; active?: boolean }) =>
+  update: (planType: BillingPlan, data: { monthlyPrice?: number; weeklyPrice?: number | null; active?: boolean }) =>
     api
       .put<AdminBillingPlan>(`/api/v1/admin/billing-plans/${planType}`, data)
       .then((r) => r.data),
@@ -154,7 +154,7 @@ export const adminPaymentApi = {
   summary: (params: { from: string; to: string }) =>
     api.get<AdminPaymentSummary>("/api/v1/admin/payments/summary", { params }).then((r) => r.data),
 
-  /** Undoes a mistaken cash/promotion entry (takes its months back). Mobile-money payments cannot be voided here. */
+  /** Undoes a mistaken cash/promotion entry (takes its weeks/months back). Mobile-money payments cannot be voided here. */
   void: (paymentId: string, reason: string) =>
     api
       .post<{ payment: AdminPaymentResponse; subscription: AdminSubscriptionRow | null }>(`/api/v1/admin/payments/${paymentId}/void`, { reason })
