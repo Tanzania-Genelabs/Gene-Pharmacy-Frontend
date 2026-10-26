@@ -8,6 +8,10 @@ import type {
   AuditLogResponse,
   SystemStatus,
   AdminBillingPlan,
+  AdminPaymentResponse,
+  AdminPaymentSummary,
+  AdminSubscriptionRow,
+  GrantAccessRequest,
   BillingPlan,
   SubscriptionResponse,
   Role,
@@ -82,13 +86,21 @@ export const adminSubscriptionApi = {
     status?: string;
     planType?: string;
     pharmacyId?: string;
+    search?: string;
     page?: number;
     size?: number;
   }) =>
     api
-      .get<Page<SubscriptionResponse>>("/api/v1/admin/subscriptions", {
-        params,
-      })
+      .get<Page<AdminSubscriptionRow>>("/api/v1/admin/subscriptions", { params })
+      .then((r) => r.data),
+
+  /**
+   * Gives a pharmacy access without ClickPesa: cash that was received, or a free promotion. Extends
+   * its subscription and records the entry in the payment ledger.
+   */
+  grant: (data: GrantAccessRequest) =>
+    api
+      .post<{ payment: AdminPaymentResponse; subscription: AdminSubscriptionRow }>("/api/v1/admin/subscriptions/grant", data)
       .then((r) => r.data),
 
   getById: (subscriptionId: string) =>
@@ -122,4 +134,29 @@ export const adminBillingPlanApi = {
 export const adminSystemApi = {
   /** Live measurements of the running platform (database, scheduler, backups, payments, ...). */
   status: () => api.get<SystemStatus>("/api/v1/admin/system").then((r) => r.data),
+};
+
+// ─── Admin Payments (ledger of what pharmacies paid) ──────────────────────────
+
+export const adminPaymentApi = {
+  list: (params?: {
+    pharmacyId?: string;
+    method?: string;
+    status?: string;
+    from?: string;
+    to?: string;
+    search?: string;
+    page?: number;
+    size?: number;
+  }) =>
+    api.get<Page<AdminPaymentResponse>>("/api/v1/admin/payments", { params }).then((r) => r.data),
+
+  summary: (params: { from: string; to: string }) =>
+    api.get<AdminPaymentSummary>("/api/v1/admin/payments/summary", { params }).then((r) => r.data),
+
+  /** Undoes a mistaken cash/promotion entry (takes its months back). Mobile-money payments cannot be voided here. */
+  void: (paymentId: string, reason: string) =>
+    api
+      .post<{ payment: AdminPaymentResponse; subscription: AdminSubscriptionRow | null }>(`/api/v1/admin/payments/${paymentId}/void`, { reason })
+      .then((r) => r.data),
 };
