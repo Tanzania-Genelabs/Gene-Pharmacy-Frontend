@@ -230,8 +230,9 @@ export interface DrugResponse {
   genericName: string | null;
   barcode: string | null;
   unit: string;
+  /** Whole or decimal TZS. The API client converts the server's decimal strings to numbers. */
   sellingPrice: number;
-  buyingPrice: number;
+  buyingPrice: number | null;
   reorderLevel: number;
   requiresPrescription: boolean;
   categoryId: string | null;
@@ -253,7 +254,21 @@ export interface CreateDrugRequest {
   categoryId?: string;
 }
 
-export interface UpdateDrugRequest extends Partial<CreateDrugRequest> {}
+/**
+ * Fields left out are unchanged. Optional details are cleared by sending null; name, unit, selling
+ * price, reorder level and the prescription flag can be changed but never blanked.
+ */
+export interface UpdateDrugRequest {
+  name?: string;
+  genericName?: string | null;
+  barcode?: string | null;
+  unit?: string;
+  sellingPrice?: number;
+  buyingPrice?: number | null;
+  reorderLevel?: number;
+  requiresPrescription?: boolean;
+  categoryId?: string | null;
+}
 
 export interface DrugImportResult {
   totalRows: number;
@@ -691,42 +706,76 @@ export interface NotificationSummaryResponse {
 
 // ─── Audit Log ────────────────────────────────────────────────────────────────
 
-export type AuditAction =
-  | "Create"
-  | "Update"
-  | "Delete"
-  | "Login"
-  | "Logout"
-  | "Approve"
-  | "Reject"
-  | "Suspend"
-  | "Reactivate"
-  | "Export"
-  | "Import";
+/**
+ * What happened, as the backend records it (e.g. "SaleVoided", "DrugUpdated", "Login"). The list of
+ * values that really exist comes from the facets endpoint, not from a fixed list here.
+ */
+export type AuditAction = string;
 
 export interface AuditLogResponse {
   id: string;
-  pharmacyId: string;
-  actorId: string;
-  actorEmail: string;
-  /** alias for actorEmail (display-friendly) */
-  performedBy: string;
-  /** role of the actor */
-  userRole: string;
+  /** null for platform-level events (a SuperAdmin signing in, a plan price changing). */
+  pharmacyId: string | null;
+  /** Only on the platform-wide (SuperAdmin) listing. */
+  pharmacyName?: string | null;
+  actorId: string | null;
+  /** null when the system itself did it (e.g. a confirmed payment extending a subscription). */
+  actorEmail: string | null;
   action: AuditAction;
   entityType: string;
   entityId: string | null;
-  details: string | null;
+  description: string;
   ipAddress: string | null;
   createdAt: string;
 }
 
 export interface AuditLogSummaryResponse {
-  id: string;
-  actorEmail: string;
-  action: AuditAction;
-  entityType: string;
-  createdAt: string;
+  totalCount: number;
+  latestItems: AuditLogResponse[];
+}
+
+/** The actions and entity types that exist in the log, for filter dropdowns. */
+export interface AuditFacets {
+  actions: string[];
+  entityTypes: string[];
+}
+
+export type SystemWarningLevel = "critical" | "warning" | "info";
+
+/** Live measurements from GET /admin/system. Nothing in it is a fixed claim. */
+export interface SystemStatus {
+  checkedAt: string;
+  application: {
+    environment: string;
+    debug: boolean;
+    laravel: string;
+    php: string;
+    timezone: string;
+    url: string;
+  };
+  database: { reachable: boolean; driver: string; version: string | null; latencyMs: number | null };
+  migrations: { applied: number | null; pending: number | null; latest: string | null };
+  cache: { store: string; working: boolean };
+  scheduler: { lastRunAt: string | null; running: boolean };
+  backups: { latestAt: string | null; latestSizeKb: number | null; count: number; offServerCopy: boolean };
+  payments: {
+    gateway: string;
+    configured: boolean;
+    checksumEnabled: boolean;
+    webhookUrl: string;
+    pendingCount: number | null;
+    oldestPendingAt: string | null;
+  };
+  errorTracking: { configured: boolean };
+  security: { https: boolean; trustedProxiesConfigured: boolean; frontendProxySecretConfigured: boolean };
+  authentication: { accessTokenMinutes: number; refreshTokenDays: number };
+  platform: {
+    pharmacies: Record<string, number>;
+    users: { total: number; enabled: number; disabled: number };
+    subscriptions: Record<string, number>;
+    plans: { planType: string; active: boolean }[];
+  } | null;
+  warnings: { level: SystemWarningLevel; message: string }[];
 }
 
 // ─── Subscription ─────────────────────────────────────────────────────────────
@@ -748,6 +797,8 @@ export interface SubscriptionResponse {
   endDate: string;
   graceEndDate: string | null;
   paymentReference: string | null;
+  /** Whole days left until endDate (0 once it has passed). */
+  daysRemaining?: number;
   accessGranted: boolean;
   createdAt: string;
   updatedAt: string;
@@ -956,39 +1007,60 @@ export interface BranchScorecardResponse {
 
 // ─── Payment ──────────────────────────────────────────────────────────────────
 
-// "ClickPesa" = mobile money collected through ClickPesa (the network is detected from the phone number).
-// The network names are kept for older records.
-export type PaymentProvider = "ClickPesa" | "Mpesa" | "TigoPesa" | "AirtelMoney" | "HaloPesa" | "Cash" | "Card";
+// Billing: the pharmacy's own Gene Pharmacy subscription, paid for with ClickPesa mobile money.
+// (ClickPesa is never used at the till.)
+export type BillingPlan = "Basic" | "Standard" | "Premium";
 export type PaymentStatus = "Pending" | "Completed" | "Failed" | "Cancelled" | "Reversed";
 
-export interface PaymentTransactionResponse {
+/** A plan as the SuperAdmin sees it (including plans that are switched off). */
+export interface AdminBillingPlan {
+  planType: BillingPlan;
+  /** Whole TZS per month, as a string. */
+  monthlyPrice: string;
+  active: boolean;
+  updatedBy: string | null;
+  updatedAt: string | null;
+}
+
+export interface BillingPlanOffer {
+  planType: BillingPlan;
+  /** Whole TZS per month, as a string. */
+  monthlyPrice: string;
+}
+
+export interface BillingOverview {
+  subscription: SubscriptionResponse | null;
+  plans: BillingPlanOffer[];
+  /** Months that can be bought in one payment. */
+  durations: number[];
+  currency: string;
+  /** False until ClickPesa credentials and at least one plan price are configured on the server. */
+  paymentsEnabled: boolean;
+}
+
+export interface SubscriptionPaymentResponse {
   id: string;
   pharmacyId: string;
-  branchId: string | null;
-  saleId: string | null;
-  provider: PaymentProvider;
-  /** Payment gateway; null for cash and for legacy simulated records. */
-  gateway: string | null;
-  /** Mobile network chosen by the gateway, e.g. "TIGO-PESA". */
+  purpose: "Subscription" | null;
+  planType: BillingPlan | null;
+  months: number | null;
+  /** Mobile network chosen by ClickPesa, e.g. "TIGO-PESA". */
   channel: string | null;
   status: PaymentStatus;
-  /** Decimal string, e.g. "5000.00". */
+  /** Whole TZS, as a string. */
   amount: string;
   currency: string;
   phoneNumber: string | null;
-  externalReference: string | null;
   internalReference: string;
   failureReason: string | null;
   createdAt: string;
   completedAt: string | null;
 }
 
-export interface InitiatePaymentRequest {
-  branchId?: string;
-  saleId?: string;
-  provider: PaymentProvider;
-  amount: number;
-  phoneNumber?: string;
+export interface PayForSubscriptionRequest {
+  planType: BillingPlan;
+  months: number;
+  phoneNumber: string;
 }
 
 // ─── POS ──────────────────────────────────────────────────────────────────────
