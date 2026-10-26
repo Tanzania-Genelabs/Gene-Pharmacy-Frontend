@@ -1,10 +1,13 @@
 "use client";
 
 import { use, useState, useRef, useEffect, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { posApi } from "@/api/pos.api";
 import { customerApi } from "@/api/customer.api";
 import { branchApi } from "@/api/branch.api";
+import { catalogApi } from "@/api/catalog.api";
+import { useAuthStore } from "@/store/auth.store";
 import { toast } from "sonner";
 import {
   ScanBarcode,
@@ -82,6 +85,10 @@ export default function PosPage({ params }: PageProps) {
     barcodeRef.current?.focus();
   }, [cart]);
 
+  const router = useRouter();
+  // Sellers can't add drugs; owners and managers can.
+  const canAddDrugs = useAuthStore((state) => state.user?.role !== "Seller");
+
   const handleBarcodeScan = useCallback(async () => {
     const code = barcodeInput.trim();
     if (!code || !branchId) return;
@@ -98,10 +105,28 @@ export default function PosPage({ params }: PageProps) {
       const result = await posApi.lookupBarcode(pharmacyId, code, branchId);
       addToCart(result);
     } catch {
+      // Not one of this pharmacy's drugs. If the shared catalog knows the barcode, owners and managers
+      // can add it in a couple of taps instead of being stuck at the till.
+      if (canAddDrugs) {
+        try {
+          const item = await catalogApi.byBarcode(pharmacyId, code);
+          if (!item.alreadyAdded) {
+            toast.message(`"${item.name}" is not in your drugs yet`, {
+              description: "It is in the shared catalog. Add it with your own price.",
+              action: { label: "Add it", onClick: () => router.push(`/${pharmacyId}/drugs?catalog=${encodeURIComponent(code)}`) },
+              duration: 12000,
+            });
+            setBarcodeInput("");
+            return;
+          }
+        } catch {
+          // Not in the catalog either: fall through to the plain message.
+        }
+      }
       toast.error(`Drug not found for barcode: ${code}`);
     }
     setBarcodeInput("");
-  }, [barcodeInput, branchId, cart, pharmacyId]);
+  }, [barcodeInput, branchId, cart, pharmacyId, canAddDrugs, router]);
 
   function addToCart(drug: BarcodeLookupResponse) {
     const existing = cart.find((c) => c.drugId === drug.drugId);
