@@ -229,7 +229,12 @@ export interface DrugResponse {
   name: string;
   genericName: string | null;
   barcode: string | null;
+  /** The smallest unit sold (e.g. tablet). Prices, stock and sale quantities are all counted in it. */
   unit: string;
+  /** How many `unit`s make one pack (1 = not sold in packs). */
+  unitsPerPack: number;
+  /** Name of the pack, e.g. "box". Null when unitsPerPack is 1. */
+  packUnit: string | null;
   /** Whole or decimal TZS. The API client converts the server's decimal strings to numbers. */
   sellingPrice: number;
   buyingPrice: number | null;
@@ -249,6 +254,8 @@ export interface CreateDrugRequest {
   genericName?: string;
   barcode?: string;
   unit: string;
+  unitsPerPack?: number;
+  packUnit?: string;
   sellingPrice: number;
   buyingPrice: number;
   reorderLevel: number;
@@ -265,6 +272,8 @@ export interface UpdateDrugRequest {
   genericName?: string | null;
   barcode?: string | null;
   unit?: string;
+  unitsPerPack?: number;
+  packUnit?: string | null;
   sellingPrice?: number;
   buyingPrice?: number | null;
   reorderLevel?: number;
@@ -379,6 +388,9 @@ export interface StockResponse {
   branchName: string;
   drugId: string;
   drugName: string;
+  unit: string;
+  unitsPerPack: number;
+  packUnit: string | null;
   quantity: number;
   reorderLevel: number;
   expiryDate: string | null;
@@ -390,6 +402,9 @@ export interface LowStockResponse {
   drugName: string;
   branchId: string;
   branchName: string;
+  unit: string;
+  unitsPerPack: number;
+  packUnit: string | null;
   currentQuantity: number;
   /** alias for currentQuantity */
   currentStock: number;
@@ -1037,54 +1052,91 @@ export interface RedeemPointsRequest {
 
 // ─── Analytics ────────────────────────────────────────────────────────────────
 
+/** Money values are decimal strings from the API (e.g. "2000.00"); convert with Number() to display. */
 export interface DailySummaryResponse {
   date: string;
   sales: {
-    todayRevenue: number;
-    yesterdayRevenue: number;
-    todaySalesCount: number;
-    revenueChangePercent: number;
+    todayCount: number;
+    yesterdayCount: number;
+    todayRevenue: string;
+    yesterdayRevenue: string;
+    revenueChange: string;
+    totalCost: string;
+    grossProfit: string;
+    marginPct: string;
+    voidedCount: number;
+    discounts: string;
   };
   inventory: {
     lowStockCount: number;
     outOfStockCount: number;
-    expiringIn30Days: number;
+    nearExpiryCount: number;
+    expiredCount: number;
+    expiryLoss: string;
   };
   alerts: {
-    pendingReorders: number;
-    unreadNotifications: number;
+    criticalReorderCount: number;
+    marginLeakageCount: number;
+    discountAbuseCount: number;
   };
 }
 
 export interface DeadStockItemResponse {
   drugId: string;
   drugName: string;
-  branchName: string;
+  genericName: string | null;
+  branchId: string;
+  branchName: string | null;
   currentStock: number;
-  lastSoldAt: string | null;
   daysSinceLastSale: number;
-  stockValue: number;
+  lastSoldAt: string | null;
+  stockValue: string;
+  sellingPrice: string;
+  buyingPrice: string | null;
 }
 
 export interface MarginLeakageAlertResponse {
   saleId: string;
   receiptNumber: string;
+  drugId: string;
   drugName: string;
-  unitPrice: number;
-  costPrice: number;
   quantity: number;
-  lossAmount: number;
+  unitPrice: string;
+  buyingPrice: string;
+  lossPerUnit: string;
+  totalLoss: string;
+  soldBy: string | null;
   saleDate: string;
 }
 
 export interface BranchScorecardResponse {
   branchId: string;
   branchName: string;
-  totalRevenue: number;
-  totalSales: number;
-  avgSaleValue: number;
-  lowStockItems: number;
-  topSellingDrug: string | null;
+  totalRevenue: string;
+  totalCost: string;
+  grossProfit: string;
+  marginPct: string;
+  totalTransactions: number;
+  lowStockCount: number;
+  outOfStockCount: number;
+  stockoutEvents: number;
+  averageTransactionValue: string;
+}
+
+export interface SellerPerformanceResponse {
+  sellerId: string | null;
+  sellerName: string;
+  role: string | null;
+  branchId: string;
+  branchName: string | null;
+  totalTransactions: number;
+  totalRevenue: string;
+  totalCost: string;
+  grossProfit: string;
+  marginPct: string;
+  averageTransactionValue: string;
+  discounts: string;
+  voidedCount: number;
 }
 
 // ─── Payment ──────────────────────────────────────────────────────────────────
