@@ -72,7 +72,7 @@ function buildNavItems(pharmacyId: string): NavItem[] {
     { label: "Inventory",        href: `/${pharmacyId}/inventory`,         icon: Package,         roles: NO_SELLER },
     { label: "Expiry & Stock",   href: `/${pharmacyId}/expiry`,            icon: AlertTriangle,   roles: NO_SELLER },
     { label: "Sales",            href: `/${pharmacyId}/sales`,             icon: ShoppingCart,    roles: ALL },
-    { label: "Payments",         href: `/${pharmacyId}/payments`,          icon: CreditCard,      roles: NO_SELLER },
+    { label: "Billing",          href: `/${pharmacyId}/billing`,           icon: CreditCard,      roles: OWNER_AND_ABOVE },
     { label: "Shifts",           href: `/${pharmacyId}/shifts`,            icon: Clock,           roles: ALL },
     { label: "Customers",        href: `/${pharmacyId}/customers`,         icon: Heart,           roles: NO_SELLER },
     { label: "Loyalty",          href: `/${pharmacyId}/loyalty`,           icon: Gift,            roles: NO_SELLER },
