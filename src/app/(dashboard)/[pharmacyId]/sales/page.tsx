@@ -1,16 +1,15 @@
 "use client";
 
-import { use, useState, useMemo, useRef, useCallback, useEffect } from "react";
+import { use, useState, useMemo, useRef, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { salesApi } from "@/api/sales.api";
 import { drugApi, drugCategoryApi } from "@/api/drug.api";
 import { branchApi } from "@/api/branch.api";
-import { paymentApi } from "@/api/payment.api";
 import { useAuthStore } from "@/store/auth.store";
 import { toast } from "sonner";
 import {
   ShoppingCart, Search, Plus, Minus, Trash2, X, Receipt,
-  Printer, History, Monitor, MoreHorizontal, Pill, Package, AlertCircle, Loader2, CheckCircle2,
+  Printer, History, Monitor, MoreHorizontal, Pill, Package, AlertCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -125,10 +124,6 @@ export default function SalesPage({ params }: PageProps) {
   const [paymentMethod, setPaymentMethod] = useState<SalePaymentMethod>("Cash");
   const [notes, setNotes] = useState("");
   const [amountPaid, setAmountPaid] = useState<string>("");
-  // Mobile money (ClickPesa): the customer approves on their phone before the sale is recorded.
-  const [mobilePhone, setMobilePhone] = useState("");
-  const [pendingPaymentId, setPendingPaymentId] = useState<string | null>(null);
-  const saleSubmittedForPayment = useRef<string | null>(null);
   const [search, setSearch] = useState("");
   const [selectedCatId, setSelectedCatId] = useState("all");
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -191,7 +186,7 @@ export default function SalesPage({ params }: PageProps) {
       cart.forEach((i) => { names[i.drugId] = i.drugName; });
       setReceiptDrugNames(names);
       setReceiptSale(sale);
-      setCart([]); setNotes(""); setAmountPaid(""); setMobilePhone(""); setPendingPaymentId(null);
+      setCart([]); setNotes(""); setAmountPaid("");
       qc.invalidateQueries({ queryKey: ["sales", pharmacyId] });
     },
     onError: (err: unknown) => {
@@ -201,42 +196,6 @@ export default function SalesPage({ params }: PageProps) {
       toast.error(msg);
     },
   });
-
-  const initiateMobilePayment = useMutation({
-    mutationFn: () =>
-      paymentApi.initiate(pharmacyId, { provider: "ClickPesa", amount: netTotal, phoneNumber: mobilePhone }),
-    onSuccess: (payment) => {
-      saleSubmittedForPayment.current = null;
-      setPendingPaymentId(payment.id);
-    },
-    onError: (err: unknown) => {
-      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
-      toast.error(msg ?? "Could not send the payment request");
-    },
-  });
-
-  // Polls every 3s while the customer is entering their PIN (the server throttles calls to ClickPesa).
-  const { data: mobilePayment } = useQuery({
-    queryKey: ["mobile-payment", pharmacyId, pendingPaymentId],
-    queryFn: () => paymentApi.getById(pharmacyId, pendingPaymentId!),
-    enabled: !!pendingPaymentId,
-    refetchInterval: (query) => (query.state.data && query.state.data.status !== "Pending" ? false : 3000),
-  });
-
-  useEffect(() => {
-    if (!mobilePayment) return;
-
-    if (mobilePayment.status === "Completed") {
-      // Record the sale exactly once for this payment.
-      if (saleSubmittedForPayment.current === mobilePayment.id) return;
-      saleSubmittedForPayment.current = mobilePayment.id;
-      submitSale(netTotal, `Mobile money ${mobilePayment.internalReference}`);
-    } else if (mobilePayment.status !== "Pending") {
-      toast.error(mobilePayment.failureReason ?? "The customer did not approve the payment");
-      setPendingPaymentId(null);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mobilePayment]);
 
   const voidMutation = useMutation({
     mutationFn: ({ id, reason }: { id: string; reason: string }) => salesApi.void(pharmacyId, id, { reason }),
@@ -262,15 +221,19 @@ export default function SalesPage({ params }: PageProps) {
     return `RCP-${ymd}-${hms}-${rand}`;
   }
 
-  function submitSale(paid: number, noteSuffix?: string) {
-    const combinedNotes = [notes.trim(), noteSuffix].filter(Boolean).join(" · ");
+  function handleCompleteSale() {
+    if (cart.length === 0) { toast.error("Cart is empty"); return; }
+    if (!branchId) { toast.error("Select a branch first"); return; }
+    if (!user?.id) { toast.error("Not authenticated"); return; }
+    const paid = parseFloat(amountPaid) || netTotal;
+    if (paid < netTotal) { toast.error(`Amount paid (TZS ${fmt(paid)}) is less than total (TZS ${fmt(netTotal)})`); return; }
     completeSaleMutation.mutate({
       branchId,
-      soldBy: user!.id,
+      soldBy: user.id,
       receiptNumber: generateReceiptNumber(),
       paymentMethod,
       amountPaid: paid,
-      notes: combinedNotes || undefined,
+      notes: notes.trim() || undefined,
       items: cart.map((i) => ({
         drugId: i.drugId,
         quantity: i.quantity,
@@ -279,22 +242,6 @@ export default function SalesPage({ params }: PageProps) {
         discountAmount: Math.round((i.unitPrice * i.quantity * i.discountPct) / 100),
       })),
     });
-  }
-
-  function handleCompleteSale() {
-    if (cart.length === 0) { toast.error("Cart is empty"); return; }
-    if (!branchId) { toast.error("Select a branch first"); return; }
-    if (!user?.id) { toast.error("Not authenticated"); return; }
-
-    if (paymentMethod === "MobileMoney") {
-      if (!mobilePhone.trim()) { toast.error("Enter the customer's mobile number"); return; }
-      initiateMobilePayment.mutate();
-      return;
-    }
-
-    const paid = parseFloat(amountPaid) || netTotal;
-    if (paid < netTotal) { toast.error(`Amount paid (TZS ${fmt(paid)}) is less than total (TZS ${fmt(netTotal)})`); return; }
-    submitSale(paid);
   }
 
   function handlePrint(sale: SaleResponse) {
@@ -481,19 +428,6 @@ export default function SalesPage({ params }: PageProps) {
               </div>
             </div>
 
-            {paymentMethod === "MobileMoney" && (
-              <div className="space-y-1 flex-shrink-0">
-                <Label className="text-xs">Customer mobile number</Label>
-                <Input
-                  type="tel" inputMode="tel" placeholder="0712 345 678" className="h-8 text-sm"
-                  value={mobilePhone} onChange={(e) => setMobilePhone(e.target.value)}
-                />
-                <p className="text-[11px] text-muted-foreground">
-                  The customer gets a prompt on this phone and approves with their mobile-money PIN.
-                </p>
-              </div>
-            )}
-
             {/* Cart items */}
             <div className="flex-1 overflow-y-auto space-y-2 pr-1">
               {cart.length === 0 ? (
@@ -566,8 +500,7 @@ export default function SalesPage({ params }: PageProps) {
                   <span className="text-primary">TZS {fmt(netTotal)}</span>
                 </div>
               </div>
-              {/* Amount paid + change (not needed for mobile money: the exact total is collected) */}
-              {paymentMethod !== "MobileMoney" && (
+              {/* Amount paid + change */}
               <div className="space-y-1">
                 <Label className="text-xs">Amount Paid (TZS)</Label>
                 <Input
@@ -587,15 +520,13 @@ export default function SalesPage({ params }: PageProps) {
                   </p>
                 )}
               </div>
-              )}
               <Button
                 className="w-full" size="lg"
                 onClick={handleCompleteSale}
-                disabled={completeSaleMutation.isPending || initiateMobilePayment.isPending || !!pendingPaymentId || !branchId || cart.length === 0}
+                disabled={completeSaleMutation.isPending || !branchId || cart.length === 0}
               >
-                {completeSaleMutation.isPending || initiateMobilePayment.isPending ? "Processing…" : (
-                  <><Receipt className="h-4 w-4 mr-2" />
-                    {paymentMethod === "MobileMoney" ? "Request payment" : "Complete Sale"} · TZS {fmt(netTotal)}</>
+                {completeSaleMutation.isPending ? "Processing…" : (
+                  <><Receipt className="h-4 w-4 mr-2" />Complete Sale · TZS {fmt(netTotal)}</>
                 )}
               </Button>
             </div>
@@ -707,45 +638,6 @@ export default function SalesPage({ params }: PageProps) {
                 <Printer className="h-4 w-4 mr-2" />Print Receipt
               </Button>
             )}
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* ── Mobile money: waiting for the customer to approve ─────────────── */}
-      <Dialog open={!!pendingPaymentId} onOpenChange={() => { /* closed only via the buttons below */ }}>
-        <DialogContent className="sm:max-w-sm" onInteractOutside={(e) => e.preventDefault()}>
-          <DialogHeader>
-            <DialogTitle>
-              {mobilePayment?.status === "Completed" ? "Payment received" : "Waiting for the customer…"}
-            </DialogTitle>
-          </DialogHeader>
-          <div className="flex flex-col items-center gap-3 px-6 py-6 text-center">
-            {mobilePayment?.status === "Completed" ? (
-              <>
-                <CheckCircle2 className="h-10 w-10 text-green-600" />
-                <p className="text-sm">TZS {fmt(netTotal)} received. Recording the sale…</p>
-              </>
-            ) : (
-              <>
-                <Loader2 className="h-10 w-10 animate-spin text-muted-foreground" />
-                <p className="text-sm text-muted-foreground">
-                  A prompt for TZS {fmt(netTotal)} was sent to {mobilePhone}. Ask the customer to enter their
-                  mobile-money PIN to approve it. Don&apos;t hand over the medicine until this says “received”.
-                </p>
-              </>
-            )}
-          </div>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              disabled={mobilePayment?.status === "Completed"}
-              onClick={() => {
-                setPendingPaymentId(null);
-                toast.message("Cancelled here. If the customer already approved, find the payment under Payments.");
-              }}
-            >
-              Cancel
-            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
