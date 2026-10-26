@@ -1,5 +1,6 @@
 import type { NextConfig } from "next";
 import withPWAInit from "@ducanh2912/next-pwa";
+import { withSentryConfig } from "@sentry/nextjs/config";
 
 const withPWA = withPWAInit({
   dest: "public",
@@ -26,12 +27,20 @@ const nextConfig: NextConfig = {
     return process.env.NODE_ENV === "development"
       ? [
           {
-            source: "/api/:path*",
-            destination: `${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"}/api/:path*`,
+            source: "/api/v1/:path*",
+            destination: `${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"}/api/v1/:path*`,
           },
         ]
       : [];
   },
 };
 
-export default withPWA(nextConfig);
+// Sentry wraps the config last. Source-map upload only happens when SENTRY_AUTH_TOKEN is set in CI.
+export default withSentryConfig(withPWA(nextConfig), {
+  org: process.env.SENTRY_ORG,
+  project: process.env.SENTRY_PROJECT,
+  authToken: process.env.SENTRY_AUTH_TOKEN,
+  silent: !process.env.CI,
+  telemetry: false,
+  widenClientFileUpload: true,
+});
