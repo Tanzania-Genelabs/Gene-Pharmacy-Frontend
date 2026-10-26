@@ -12,22 +12,19 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import type { BillingPlan } from "@/types";
+import { addPeriod, periodLabel, unitPrice } from "@/lib/billing";
+import type { BillingPeriodUnit, BillingPlan } from "@/types";
 
-const MONTH_CHOICES = [1, 2, 3, 4, 5, 6, 9, 12];
+/** What the admin can pick; the server accepts up to 52 weeks or 24 months. */
+const COUNT_CHOICES: Record<BillingPeriodUnit, number[]> = {
+  week: [1, 2, 3, 4, 6, 8, 12, 26, 52],
+  month: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 18, 24],
+};
 const selectClass =
   "flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring";
 
 const money = (value: number) => `TZS ${value.toLocaleString()}`;
 const dateText = (d: Date) => d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
-
-/** Adds calendar months the way the server does: 31 Jan + 1 month is 28/29 Feb, not 3 March. */
-function addMonths(from: Date, months: number): Date {
-  const result = new Date(from.getFullYear(), from.getMonth() + months, 1);
-  const lastDay = new Date(result.getFullYear(), result.getMonth() + 1, 0).getDate();
-  result.setDate(Math.min(from.getDate(), lastDay));
-  return result;
-}
 
 interface GrantAccessDialogProps {
   open: boolean;
@@ -67,7 +64,8 @@ function GrantAccessForm({
   const [pharmacyId, setPharmacyId] = useState(presetPharmacyId ?? "");
   const [kind, setKind] = useState<"Cash" | "Promotion">("Cash");
   const [planType, setPlanType] = useState<BillingPlan>("Standard");
-  const [months, setMonths] = useState(1);
+  const [unit, setUnit] = useState<BillingPeriodUnit>("month");
+  const [count, setCount] = useState(1);
   // null = "use the list price"; once the admin types, their figure wins.
   const [amountOverride, setAmountOverride] = useState<string | null>(null);
   const [reference, setReference] = useState("");
@@ -91,10 +89,11 @@ function GrantAccessForm({
   });
   const subscription = pharmacyId ? current?.content[0] : undefined;
 
+  // The plan's list price for this period; null when the plan has no price for that unit (e.g. no weekly price).
   const listPrice = useMemo(() => {
-    const plan = plans?.find((p) => p.planType === planType);
-    return plan ? Number(plan.monthlyPrice) * months : null;
-  }, [plans, planType, months]);
+    const each = unitPrice(plans?.find((p) => p.planType === planType), unit);
+    return each === null ? null : each * count;
+  }, [plans, planType, unit, count]);
 
   // Cash defaults to the list price until the admin types their own figure.
   const amount = amountOverride ?? (listPrice !== null ? String(listPrice) : "");
@@ -109,9 +108,9 @@ function GrantAccessForm({
     return {
       currentEnd: subscription ? dateText(currentEnd!) : null,
       running,
-      newEnd: dateText(addMonths(running ? currentEnd! : today, months)),
+      newEnd: dateText(addPeriod(running ? currentEnd! : today, unit, count)),
     };
-  }, [pharmacyId, subscription, months]);
+  }, [pharmacyId, subscription, unit, count]);
 
   const grant = useMutation({
     mutationFn: () =>
@@ -119,7 +118,8 @@ function GrantAccessForm({
         pharmacyId,
         kind,
         planType,
-        months,
+        periodUnit: unit,
+        periodCount: count,
         amount: kind === "Cash" && amount.trim() !== "" ? Number(amount) : undefined,
         reference: reference.trim() || undefined,
         note: note.trim() || undefined,
@@ -194,23 +194,43 @@ function GrantAccessForm({
             <div className="space-y-1">
               <Label htmlFor="g-plan">Plan *</Label>
               <select id="g-plan" className={selectClass} value={planType} onChange={(e) => setPlanType(e.target.value as BillingPlan)}>
-                {(plans ?? [{ planType: "Basic", monthlyPrice: "" }, { planType: "Standard", monthlyPrice: "" }, { planType: "Premium", monthlyPrice: "" }]).map((p) => (
+                {(plans ?? [
+                  { planType: "Basic", monthlyPrice: "", weeklyPrice: null },
+                  { planType: "Standard", monthlyPrice: "", weeklyPrice: null },
+                  { planType: "Premium", monthlyPrice: "", weeklyPrice: null },
+                ]).map((p) => (
                   <option key={p.planType} value={p.planType}>
                     {p.planType}
-                    {p.monthlyPrice ? ` — ${money(Number(p.monthlyPrice))}/month` : ""}
+                    {p.monthlyPrice
+                      ? ` — ${p.weeklyPrice ? `${money(Number(p.weeklyPrice))}/week · ` : ""}${money(Number(p.monthlyPrice))}/month`
+                      : ""}
                   </option>
                 ))}
               </select>
             </div>
             <div className="space-y-1">
-              <Label htmlFor="g-months">For *</Label>
-              <select id="g-months" className={selectClass} value={months} onChange={(e) => setMonths(Number(e.target.value))}>
-                {MONTH_CHOICES.map((m) => (
-                  <option key={m} value={m}>
-                    {m} {m === 1 ? "month" : "months"}
-                  </option>
-                ))}
-              </select>
+              <Label htmlFor="g-unit">For *</Label>
+              <div className="grid grid-cols-2 gap-2">
+                <select
+                  id="g-unit"
+                  className={selectClass}
+                  value={unit}
+                  onChange={(e) => {
+                    setUnit(e.target.value as BillingPeriodUnit);
+                    setCount(1);
+                  }}
+                >
+                  <option value="week">Weeks</option>
+                  <option value="month">Months</option>
+                </select>
+                <select id="g-count" aria-label="How many" className={selectClass} value={count} onChange={(e) => setCount(Number(e.target.value))}>
+                  {COUNT_CHOICES[unit].map((n) => (
+                    <option key={n} value={n}>
+                      {periodLabel(unit, n)}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
           </div>
 
@@ -229,6 +249,11 @@ function GrantAccessForm({
                 />
                 {listPrice !== null && Number(amount) !== listPrice && amount !== "" && (
                   <p className="text-xs text-muted-foreground">List price for this is {money(listPrice)}.</p>
+                )}
+                {listPrice === null && (
+                  <p className="text-xs text-muted-foreground">
+                    This plan has no {unit}ly price, so type what was received.
+                  </p>
                 )}
               </div>
               <div className="space-y-1">
