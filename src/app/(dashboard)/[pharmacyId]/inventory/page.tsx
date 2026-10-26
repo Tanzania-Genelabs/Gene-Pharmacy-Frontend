@@ -28,6 +28,8 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
+import { PackQuantityField } from "@/components/inventory/pack-quantity-field";
+import { formatQuantity, packInfo } from "@/lib/packs";
 import type { StockAdjustmentRequest, StockTransferRequest } from "@/types";
 
 interface PageProps {
@@ -226,14 +228,14 @@ export default function InventoryPage({ params }: PageProps) {
                   (positive = add, negative = remove)
                 </span>
               </Label>
-              <Input
+              <PackQuantityField
+                key={adjustForm.drugId}
                 id="adj-qty"
-                type="number"
+                allowNegative
                 placeholder="e.g. 50 or -10"
+                info={packInfo(drugs?.content?.find((d) => d.id === adjustForm.drugId))}
                 value={adjustForm.adjustmentQuantity}
-                onChange={(e) =>
-                  setAdjustForm((f) => ({ ...f, adjustmentQuantity: Number(e.target.value) }))
-                }
+                onChange={(units) => setAdjustForm((f) => ({ ...f, adjustmentQuantity: units }))}
               />
             </div>
 
@@ -313,13 +315,13 @@ export default function InventoryPage({ params }: PageProps) {
 
             <div className="space-y-1">
               <Label htmlFor="tr-qty">Quantity *</Label>
-              <Input
+              <PackQuantityField
+                key={transferForm.drugId}
                 id="tr-qty"
-                type="number"
-                min={1}
                 placeholder="e.g. 20"
-                value={transferForm.quantity || ""}
-                onChange={(e) => setTransferForm((f) => ({ ...f, quantity: Number(e.target.value) }))}
+                info={packInfo(drugs?.content?.find((d) => d.id === transferForm.drugId))}
+                value={transferForm.quantity}
+                onChange={(units) => setTransferForm((f) => ({ ...f, quantity: units }))}
               />
             </div>
 
@@ -358,7 +360,7 @@ export default function InventoryPage({ params }: PageProps) {
             <div className="flex flex-wrap gap-2">
               {lowStock.content.slice(0, 6).map((item) => (
                 <Badge key={`${item.drugId}-${item.branchId}`} variant="outline" className="border-orange-300 dark:border-orange-700">
-                  {item.drugName}: {item.currentStock} left
+                  {item.drugName}: {formatQuantity(item.currentStock, packInfo(item))} left
                 </Badge>
               ))}
               {lowStock.totalElements > 6 && (
@@ -414,10 +416,10 @@ export default function InventoryPage({ params }: PageProps) {
                         <TableCell className="font-medium">{stock.drugName}</TableCell>
                         <TableCell className="text-muted-foreground">{stock.branchName}</TableCell>
                         <TableCell className="tabular-nums font-semibold">
-                          {stock.quantity}
+                          {formatQuantity(stock.quantity, packInfo(stock))}
                         </TableCell>
                         <TableCell className="tabular-nums text-muted-foreground">
-                          {stock.reorderLevel}
+                          {stock.reorderLevel} {stock.unit}
                         </TableCell>
                         <TableCell>
                           <Badge
