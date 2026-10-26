@@ -1011,12 +1011,16 @@ export interface BranchScorecardResponse {
 // (ClickPesa is never used at the till.)
 export type BillingPlan = "Basic" | "Standard" | "Premium";
 export type PaymentStatus = "Pending" | "Completed" | "Failed" | "Cancelled" | "Reversed";
+/** A subscription is bought by the week or by the month. */
+export type BillingPeriodUnit = "week" | "month";
 
 /** A plan as the SuperAdmin sees it (including plans that are switched off). */
 export interface AdminBillingPlan {
   planType: BillingPlan;
   /** Whole TZS per month, as a string. */
   monthlyPrice: string;
+  /** Whole TZS per week; null when the plan is not sold weekly. */
+  weeklyPrice: string | null;
   active: boolean;
   updatedBy: string | null;
   updatedAt: string | null;
@@ -1026,13 +1030,15 @@ export interface BillingPlanOffer {
   planType: BillingPlan;
   /** Whole TZS per month, as a string. */
   monthlyPrice: string;
+  /** Whole TZS per week, as a string; null when this plan is only sold monthly. */
+  weeklyPrice: string | null;
 }
 
 export interface BillingOverview {
   subscription: SubscriptionResponse | null;
   plans: BillingPlanOffer[];
-  /** Months that can be bought in one payment. */
-  durations: number[];
+  /** How many weeks / months can be bought in one payment. */
+  durations: Record<BillingPeriodUnit, number[]>;
   currency: string;
   /** False until ClickPesa credentials and at least one plan price are configured on the server. */
   paymentsEnabled: boolean;
@@ -1046,7 +1052,10 @@ export interface SubscriptionPaymentResponse {
   pharmacyId: string;
   purpose: "Subscription" | null;
   planType: BillingPlan | null;
-  months: number | null;
+  periodUnit: BillingPeriodUnit;
+  periodCount: number | null;
+  /** Ready to show, e.g. "2 weeks" or "5 months". */
+  periodLabel: string;
   method: PaymentMethod | null;
   /** Mobile network chosen by ClickPesa, e.g. "TIGO-PESA". */
   channel: string | null;
@@ -1088,7 +1097,14 @@ export interface AdminSubscriptionRow extends SubscriptionResponse {
   payments: {
     totalPaid: string;
     paymentCount: number;
-    lastPayment: { method: PaymentMethod; amount: string; planType: BillingPlan | null; months: number | null; at: string | null } | null;
+    lastPayment: {
+      method: PaymentMethod;
+      amount: string;
+      planType: BillingPlan | null;
+      periodUnit: BillingPeriodUnit;
+      periodCount: number | null;
+      at: string | null;
+    } | null;
   };
 }
 
@@ -1096,8 +1112,10 @@ export interface GrantAccessRequest {
   pharmacyId: string;
   kind: "Cash" | "Promotion";
   planType: BillingPlan;
-  months: number;
-  /** Cash only. Leave out to use the plan's list price for that many months. */
+  periodUnit: BillingPeriodUnit;
+  /** 1 to 52 weeks, or 1 to 24 months. */
+  periodCount: number;
+  /** Cash only. Leave out to use the plan's list price for that period. */
   amount?: number;
   /** Receipt number for cash. */
   reference?: string;
@@ -1107,7 +1125,8 @@ export interface GrantAccessRequest {
 
 export interface PayForSubscriptionRequest {
   planType: BillingPlan;
-  months: number;
+  periodUnit: BillingPeriodUnit;
+  periodCount: number;
   phoneNumber: string;
 }
 
