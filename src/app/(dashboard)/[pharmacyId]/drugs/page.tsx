@@ -1,10 +1,11 @@
 "use client";
 
 import { use, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { drugApi, drugCategoryApi } from "@/api/drug.api";
 import { toast } from "sonner";
-import { Plus, Search, Upload, Pill, MoreHorizontal, AlertTriangle } from "lucide-react";
+import { Plus, Search, Upload, Pill, MoreHorizontal, AlertTriangle, Library, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -32,6 +33,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { apiErrorMessage } from "@/lib/errors";
+import { CatalogPickerDialog } from "@/components/catalog/catalog-picker-dialog";
 import type { CreateDrugRequest, DrugResponse, UpdateDrugRequest } from "@/types";
 
 interface PageProps {
@@ -87,6 +89,10 @@ export default function DrugsPage({ params }: PageProps) {
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
   // One dialog serves both: `editing` is the drug being changed, or null when adding a new one.
+  // The catalog picker can be opened straight away with a barcode (?catalog=...) when the till
+  // scanned a product this pharmacy doesn't have yet.
+  const catalogParam = useSearchParams().get("catalog");
+  const [showCatalog, setShowCatalog] = useState(!!catalogParam);
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<DrugResponse | null>(null);
   const [form, setForm] = useState<DrugForm>(emptyForm());
@@ -216,13 +222,34 @@ export default function DrugsPage({ params }: PageProps) {
     }
     try {
       const result = await drugApi.importExcel(pharmacyId, file);
-      toast.success(`Imported ${result.successCount} drugs. ${result.failureCount} failed.`);
       qc.invalidateQueries({ queryKey: ["drugs", pharmacyId] });
-    } catch {
-      toast.error("Import failed. Please check your file format.");
+      qc.invalidateQueries({ queryKey: ["drug-categories", pharmacyId] });
+
+      if (result.failureCount === 0) {
+        toast.success(`Imported ${result.successCount} drug${result.successCount === 1 ? "" : "s"}.`);
+      } else {
+        // Say which rows failed and why, so the sheet can be fixed and the failed rows loaded again.
+        const shown = result.errors.slice(0, 4).map((x) => `Row ${x.row}: ${x.reason}`).join("\n");
+        const more = result.errors.length > 4 ? `\n…and ${result.failureCount - 4} more` : "";
+        toast.warning(`Imported ${result.successCount}, skipped ${result.failureCount}.`, { description: shown + more, duration: 15000 });
+      }
+    } catch (err) {
+      toast.error(apiErrorMessage(err, "Import failed. Use an Excel (.xlsx) or CSV file with a header row."));
     }
     e.target.value = "";
   };
+
+  function downloadTemplate() {
+    const csv =
+      "Name,Generic Name,Category,Unit,Barcode,Selling Price,Buying Price,Reorder Level,Requires Prescription\n" +
+      "Paracetamol 500mg tablet,Paracetamol,Pain Relief,tablet,,1000,600,50,no\n";
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "drugs-template.csv";
+    link.click();
+    URL.revokeObjectURL(url);
+  }
 
   return (
     <div className="space-y-6">
@@ -233,9 +260,13 @@ export default function DrugsPage({ params }: PageProps) {
             {data?.totalElements ?? 0} drugs registered
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <Button variant="outline" size="sm" onClick={downloadTemplate} title="A sample file showing the columns to use">
+            <Download className="h-4 w-4 mr-2" />
+            Template
+          </Button>
           <label>
-            <input type="file" accept=".xlsx,.xls" className="hidden" onChange={handleImport} />
+            <input type="file" accept=".xlsx,.csv" className="hidden" onChange={handleImport} />
             <Button variant="outline" size="sm" asChild>
               <span className="cursor-pointer flex items-center gap-2">
                 <Upload className="h-4 w-4" />
@@ -243,12 +274,18 @@ export default function DrugsPage({ params }: PageProps) {
               </span>
             </Button>
           </label>
-          <Button size="sm" onClick={openAdd}>
+          <Button variant="outline" size="sm" onClick={openAdd}>
             <Plus className="h-4 w-4 mr-2" />
             Add Drug
           </Button>
+          <Button size="sm" onClick={() => setShowCatalog(true)}>
+            <Library className="h-4 w-4 mr-2" />
+            Add from catalog
+          </Button>
         </div>
       </div>
+
+      <CatalogPickerDialog pharmacyId={pharmacyId} open={showCatalog} onOpenChange={setShowCatalog} initialSearch={catalogParam ?? undefined} />
 
       {/* Add / Edit Drug Dialog */}
       <Dialog open={showForm} onOpenChange={(open) => (open ? setShowForm(true) : closeForm())}>
