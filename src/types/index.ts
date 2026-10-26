@@ -237,6 +237,8 @@ export interface DrugResponse {
   requiresPrescription: boolean;
   categoryId: string | null;
   categoryName: string | null;
+  /** The catalog entry this drug was created from; null when it was typed in by hand. */
+  catalogItemId?: string | null;
   active: boolean;
   createdAt: string;
   updatedAt: string;
@@ -275,6 +277,88 @@ export interface DrugImportResult {
   successCount: number;
   failureCount: number;
   errors: Array<{ row: number; reason: string }>;
+}
+
+// ─── Shared product catalog ───────────────────────────────────────────────────
+// What a product IS (name, strength, form, category, barcode). Never a price or a stock level:
+// those stay on each pharmacy's own drug.
+
+export type CatalogKind = "Medicine" | "Supplement" | "Cosmetic" | "Device" | "Other";
+
+export interface CatalogItem {
+  id: string;
+  kind: CatalogKind;
+  name: string;
+  genericName: string | null;
+  strength: string | null;
+  form: string | null;
+  unit: string;
+  category: string | null;
+  manufacturer: string | null;
+  barcode: string | null;
+  requiresPrescription: boolean;
+  /** Where the entry came from, e.g. "Gene Pharmacy starter list (unverified)". */
+  source: string | null;
+  sourceRef: string | null;
+  /** Checked by a pharmacist at Gene Pharmacy. */
+  verified: boolean;
+  active: boolean;
+  updatedBy: string | null;
+  updatedAt: string | null;
+  /** Only when browsing as a pharmacy: whether this pharmacy already has the item. */
+  alreadyAdded?: boolean | null;
+  addedAs?: string | null;
+}
+
+export interface CatalogFacets {
+  kinds: { name: string; count: number }[];
+  categories: { name: string; count: number }[];
+}
+
+export interface AddFromCatalogEntry {
+  catalogItemId: string;
+  sellingPrice: number;
+  buyingPrice?: number;
+  reorderLevel?: number;
+}
+
+export interface AddFromCatalogResult {
+  added: DrugResponse[];
+  skipped: { catalogItemId: string; name: string | null; reason: string; message: string }[];
+}
+
+export interface CatalogImportResult {
+  totalRows: number;
+  created: number;
+  updated: number;
+  unchanged: number;
+  failed: number;
+  errors: { row: number; reason: string }[];
+  /** True when the file was only checked and nothing was saved. */
+  dryRun: boolean;
+}
+
+export interface CatalogStats {
+  total: number;
+  active: number;
+  verified: number;
+  withBarcode: number;
+  byKind: Record<string, number>;
+  bySource: Record<string, number>;
+}
+
+export interface CatalogItemInput {
+  name: string;
+  kind?: CatalogKind;
+  genericName?: string | null;
+  strength?: string | null;
+  form?: string | null;
+  unit?: string;
+  category?: string | null;
+  manufacturer?: string | null;
+  barcode?: string | null;
+  requiresPrescription?: boolean;
+  verified?: boolean;
 }
 
 // ─── Inventory ────────────────────────────────────────────────────────────────
