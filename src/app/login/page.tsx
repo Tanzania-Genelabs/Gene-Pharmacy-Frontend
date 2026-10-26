@@ -39,7 +39,7 @@ function LoginForm() {
   const onSubmit = async (data: LoginFormData) => {
     try {
       const response = await authApi.login(data);
-      setAuth(response.user, response.accessToken, response.refreshToken);
+      setAuth(response.user, response.accessToken);
       toast.success(`Welcome back, ${response.user.fullName}!`);
       const { role, pharmacyId } = response.user;
       if (role === "SuperAdmin") {
