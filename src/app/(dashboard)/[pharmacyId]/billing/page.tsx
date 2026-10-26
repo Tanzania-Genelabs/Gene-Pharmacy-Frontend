@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useEffect, useMemo, useState } from "react";
+import { use, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { CheckCircle2, CreditCard, Loader2, XCircle } from "lucide-react";
@@ -12,7 +12,8 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import type { BillingPlan, PaymentStatus, SubscriptionStatus } from "@/types";
+import { monthlySaving, periodLabel, unitPrice } from "@/lib/billing";
+import type { BillingPeriodUnit, BillingPlan, PaymentStatus, SubscriptionStatus } from "@/types";
 
 interface PageProps {
   params: Promise<{ pharmacyId: string }>;
@@ -44,7 +45,8 @@ export default function BillingPage({ params }: PageProps) {
   const qc = useQueryClient();
 
   const [planType, setPlanType] = useState<BillingPlan | "">("");
-  const [months, setMonths] = useState(1);
+  const [unit, setUnit] = useState<BillingPeriodUnit>("month");
+  const [count, setCount] = useState(1);
   const [phoneNumber, setPhoneNumber] = useState("");
   const [trackedId, setTrackedId] = useState<string | null>(null);
   const [historyPage, setHistoryPage] = useState(0);
@@ -78,14 +80,20 @@ export default function BillingPage({ params }: PageProps) {
 
   const plans = overview?.plans ?? [];
   const selectedPlan = plans.find((p) => p.planType === (planType || plans[0]?.planType));
-  const total = useMemo(
-    () => (selectedPlan ? Number(selectedPlan.monthlyPrice) * months : 0),
-    [selectedPlan, months],
-  );
+  // The price of one week/month of the chosen plan; null when the plan isn't sold that way.
+  const price = unitPrice(selectedPlan, unit);
+  const total = price === null ? 0 : price * count;
+  const saving = unit === "week" ? monthlySaving(selectedPlan) : 0;
+  const sellableByWeek = plans.some((p) => unitPrice(p, "week") !== null);
+
+  function chooseUnit(next: BillingPeriodUnit) {
+    setUnit(next);
+    setCount(1);
+  }
 
   const payMutation = useMutation({
     mutationFn: () =>
-      billingApi.pay(pharmacyId, { planType: selectedPlan!.planType, months, phoneNumber }),
+      billingApi.pay(pharmacyId, { planType: selectedPlan!.planType, periodUnit: unit, periodCount: count, phoneNumber }),
     onSuccess: (payment) => {
       setTrackedId(payment.id);
       qc.invalidateQueries({ queryKey: ["billing", "payments", pharmacyId] });
@@ -98,7 +106,7 @@ export default function BillingPage({ params }: PageProps) {
 
   function handlePay(e: React.FormEvent) {
     e.preventDefault();
-    if (!selectedPlan) return;
+    if (!selectedPlan || price === null) return;
     if (!phoneNumber.trim()) {
       toast.error("Enter the mobile number to pay from");
       return;
@@ -166,6 +174,30 @@ export default function BillingPage({ params }: PageProps) {
             </p>
           ) : (
             <form onSubmit={handlePay} className="grid gap-4 sm:grid-cols-2 max-w-2xl">
+              <div className="space-y-1 sm:col-span-2">
+                <Label>How would you like to pay?</Label>
+                <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Billing period">
+                  {(["week", "month"] as const).map((option) => {
+                    const available = option === "month" || sellableByWeek;
+                    return (
+                      <button
+                        key={option}
+                        type="button"
+                        role="radio"
+                        aria-checked={unit === option}
+                        disabled={!available}
+                        onClick={() => chooseUnit(option)}
+                        className={`rounded-md border p-3 text-left text-sm transition-colors disabled:opacity-50 ${unit === option ? "border-primary bg-primary/5" : "hover:bg-muted"}`}
+                      >
+                        <span className="block font-medium">{option === "week" ? "Weekly" : "Monthly"}</span>
+                        <span className="block text-xs text-muted-foreground">
+                          {option === "week" ? "Smaller payments, more often" : "One payment, best value"}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
               <div className="space-y-1">
                 <Label htmlFor="b-plan">Plan</Label>
                 <select
@@ -174,24 +206,27 @@ export default function BillingPage({ params }: PageProps) {
                   value={selectedPlan?.planType ?? ""}
                   onChange={(e) => setPlanType(e.target.value as BillingPlan)}
                 >
-                  {plans.map((p) => (
-                    <option key={p.planType} value={p.planType}>
-                      {p.planType} — {money(p.monthlyPrice)} / month
-                    </option>
-                  ))}
+                  {plans.map((p) => {
+                    const each = unitPrice(p, unit);
+                    return (
+                      <option key={p.planType} value={p.planType} disabled={each === null}>
+                        {p.planType} — {each === null ? `not sold by the ${unit}` : `${money(each)} / ${unit}`}
+                      </option>
+                    );
+                  })}
                 </select>
               </div>
               <div className="space-y-1">
-                <Label htmlFor="b-months">Length</Label>
+                <Label htmlFor="b-count">{unit === "week" ? "How many weeks" : "How many months"}</Label>
                 <select
-                  id="b-months"
+                  id="b-count"
                   className={selectClass}
-                  value={months}
-                  onChange={(e) => setMonths(Number(e.target.value))}
+                  value={count}
+                  onChange={(e) => setCount(Number(e.target.value))}
                 >
-                  {overview.durations.map((m) => (
-                    <option key={m} value={m}>
-                      {m} {m === 1 ? "month" : "months"}
+                  {overview.durations[unit].map((n) => (
+                    <option key={n} value={n}>
+                      {periodLabel(unit, n)}
                     </option>
                   ))}
                 </select>
@@ -212,10 +247,15 @@ export default function BillingPage({ params }: PageProps) {
               </div>
               <div className="sm:col-span-2 flex items-center justify-between border-t pt-4">
                 <div>
-                  <p className="text-xs text-muted-foreground">Total</p>
+                  <p className="text-xs text-muted-foreground">Total for {periodLabel(unit, count)}</p>
                   <p className="text-xl font-bold">{money(total)}</p>
+                  {saving > 0 && (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Tip: a month of this plan costs {money(saving)} less than four weeks.
+                    </p>
+                  )}
                 </div>
-                <Button type="submit" disabled={payMutation.isPending || !selectedPlan}>
+                <Button type="submit" disabled={payMutation.isPending || !selectedPlan || price === null}>
                   {payMutation.isPending ? "Sending prompt…" : "Pay with mobile money"}
                 </Button>
               </div>
@@ -246,7 +286,7 @@ export default function BillingPage({ params }: PageProps) {
                 <TableRow key={p.id}>
                   <TableCell>{new Date(p.createdAt).toLocaleDateString()}</TableCell>
                   <TableCell>
-                    {p.planType} · {p.months} {p.months === 1 ? "month" : "months"}
+                    {p.planType} · {p.periodLabel}
                   </TableCell>
                   <TableCell className="text-right font-semibold">{p.method === "Promotion" ? "Free" : money(p.amount)}</TableCell>
                   <TableCell>
