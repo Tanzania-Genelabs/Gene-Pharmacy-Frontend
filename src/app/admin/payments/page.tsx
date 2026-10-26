@@ -214,7 +214,7 @@ export default function AdminPaymentsPage() {
                       <td className="py-3 pr-3 whitespace-nowrap text-muted-foreground">{new Date(p.createdAt).toLocaleString()}</td>
                       <td className="py-3 pr-3 font-medium">{p.pharmacyName ?? "—"}</td>
                       <td className="py-3 pr-3 whitespace-nowrap">
-                        {p.planType} · {p.months} {p.months === 1 ? "month" : "months"}
+                        {p.planType} · {p.periodLabel}
                       </td>
                       <td className="py-3 pr-3"><MethodBadge method={p.method} /></td>
                       <td className="py-3 pr-3 text-right tabular-nums whitespace-nowrap">
@@ -267,7 +267,7 @@ export default function AdminPaymentsPage() {
           {voiding && (
             <div className="space-y-4 px-6 py-4">
               <p className="text-sm">
-                This takes <strong>{voiding.months} {voiding.months === 1 ? "month" : "months"}</strong> of {voiding.planType} back off{" "}
+                This takes <strong>{voiding.periodLabel}</strong> of {voiding.planType} back off{" "}
                 <strong>{voiding.pharmacyName}</strong>&apos;s subscription
                 {voiding.method === "Cash" ? ` and removes ${money(voiding.amount)} from the money received` : ""}. The entry stays on the list marked as voided.
               </p>
