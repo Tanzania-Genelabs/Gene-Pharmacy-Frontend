@@ -22,7 +22,15 @@ export const inventoryApi = {
       .then((r) => r.data),
 
   adjust: (pharmacyId: string, data: StockAdjustmentRequest) =>
-    api.post<StockMovementResponse>(`/api/v1/pharmacies/${pharmacyId}/inventory/adjust`, data).then((r) => r.data),
+    api
+      .post<StockResponse>(`/api/v1/pharmacies/${pharmacyId}/inventory/adjust`, {
+        drugId: data.drugId,
+        branchId: data.branchId,
+        movementType: data.movementType,
+        quantity: data.adjustmentQuantity,
+        notes: data.notes,
+      })
+      .then((r) => r.data),
 
   transfer: (pharmacyId: string, data: StockTransferRequest) =>
     api.post<StockTransferResponse>(`/api/v1/pharmacies/${pharmacyId}/inventory/transfer`, data).then((r) => r.data),
