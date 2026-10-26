@@ -8,6 +8,12 @@ import type {
   AuditLogResponse,
   SystemStatus,
   AdminBillingPlan,
+  CatalogFacets,
+  CatalogImportResult,
+  CatalogItem,
+  CatalogItemInput,
+  CatalogKind,
+  CatalogStats,
   AdminPaymentResponse,
   AdminPaymentSummary,
   AdminSubscriptionRow,
@@ -159,4 +165,49 @@ export const adminPaymentApi = {
     api
       .post<{ payment: AdminPaymentResponse; subscription: AdminSubscriptionRow | null }>(`/api/v1/admin/payments/${paymentId}/void`, { reason })
       .then((r) => r.data),
+};
+
+// ─── Admin: shared product catalog ────────────────────────────────────────────
+
+export const adminCatalogApi = {
+  list: (params?: {
+    search?: string;
+    kind?: CatalogKind;
+    category?: string;
+    source?: string;
+    verified?: boolean;
+    active?: boolean;
+    page?: number;
+    size?: number;
+  }) =>
+    api
+      .get<Page<CatalogItem>>("/api/v1/admin/catalog", {
+        // Laravel's boolean rule wants 1/0, not true/false.
+        params: { ...params, verified: params?.verified === undefined ? undefined : Number(params.verified), active: params?.active === undefined ? undefined : Number(params.active) },
+      })
+      .then((r) => r.data),
+
+  facets: () => api.get<CatalogFacets>("/api/v1/admin/catalog/facets").then((r) => r.data),
+  stats: () => api.get<CatalogStats>("/api/v1/admin/catalog/stats").then((r) => r.data),
+
+  create: (data: CatalogItemInput) => api.post<CatalogItem>("/api/v1/admin/catalog", data).then((r) => r.data),
+  update: (id: string, data: Partial<CatalogItemInput>) =>
+    api.put<CatalogItem>(`/api/v1/admin/catalog/${id}`, data).then((r) => r.data),
+  /** Hides it from pharmacies; pharmacies that already added it keep their copy. */
+  deactivate: (id: string) => api.delete<CatalogItem>(`/api/v1/admin/catalog/${id}`).then((r) => r.data),
+  reactivate: (id: string) => api.post<CatalogItem>(`/api/v1/admin/catalog/${id}/reactivate`).then((r) => r.data),
+
+  /** Loads an Excel/CSV file. With dryRun the file is only checked: nothing is saved. */
+  import: (file: File, options: { dryRun: boolean; source?: string; kind?: CatalogKind; verified?: boolean }) => {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("dryRun", options.dryRun ? "1" : "0");
+    if (options.source) form.append("source", options.source);
+    if (options.kind) form.append("kind", options.kind);
+    form.append("verified", options.verified ? "1" : "0");
+
+    return api
+      .post<CatalogImportResult>("/api/v1/admin/catalog/import", form, { headers: { "Content-Type": "multipart/form-data" } })
+      .then((r) => r.data);
+  },
 };
