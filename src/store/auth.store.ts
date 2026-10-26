@@ -8,7 +8,7 @@ export interface AuthState {
   isAuthenticated: boolean;
   isInitializing: boolean;
 
-  setAuth: (user: UserSummary, accessToken: string, refreshToken: string) => void;
+  setAuth: (user: UserSummary, accessToken: string) => void;
   setPharmacyId: (id: string) => void;
   updateUser: (updates: Partial<UserSummary>) => void;
   clearAuth: () => void;
@@ -21,9 +21,8 @@ export const useAuthStore = create<AuthState>()((set) => ({
   isAuthenticated: false,
   isInitializing: true,
 
-  setAuth: (user, accessToken, refreshToken) => {
+  setAuth: (user, accessToken) => {
     tokenStore.setAccessToken(accessToken);
-    tokenStore.setRefreshToken(refreshToken);
     set({
       user,
       pharmacyId: user.pharmacyId ?? null,
