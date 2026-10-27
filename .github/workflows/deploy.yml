@@ -1,0 +1,102 @@
+name: Frontend CI/CD
+
+# Every push and PR typechecks and builds. A push to main then builds the Docker image, pushes it
+# to GitHub Container Registry and deploys it to the server (the stack itself is defined and copied
+# there by the backend repository's pipeline).
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: frontend-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  IMAGE: ghcr.io/tanzania-genelabs/gene-pharmacy-frontend
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Typecheck
+        run: npx tsc --noEmit
+      # There are existing lint errors; this reports them without blocking deploys. Remove
+      # continue-on-error once `npx eslint` is clean.
+      - name: Lint
+        run: npx eslint
+        continue-on-error: true
+
+  image:
+    needs: check
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:${{ github.sha }}
+          # Baked into the browser bundle: set them in Settings > Secrets and variables > Actions > Variables.
+          build-args: |
+            NEXT_PUBLIC_API_URL=https://${{ vars.API_DOMAIN }}
+            NEXT_PUBLIC_SENTRY_DSN=${{ vars.NEXT_PUBLIC_SENTRY_DSN }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    needs: image
+    runs-on: ubuntu-latest
+    environment: production
+    concurrency:
+      group: production-deploy
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Set up SSH
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "${{ secrets.DEPLOY_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+
+      - name: Deploy
+        env:
+          SSH_TARGET: ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}
+          SSH_PORT: ${{ secrets.DEPLOY_PORT || 22 }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # The registry token goes over stdin, never on a command line (visible in `ps` on the server).
+          printf '%s' "$REGISTRY_TOKEN" | ssh -p "$SSH_PORT" "$SSH_TARGET" "docker login ghcr.io -u '${{ github.actor }}' --password-stdin"
+          ssh -p "$SSH_PORT" "$SSH_TARGET" "cd '$DEPLOY_PATH' && ./deploy.sh web; status=\$?; docker logout ghcr.io >/dev/null; exit \$status"
+
+      - name: Check the app answers over HTTPS
+        run: |
+          for _ in $(seq 1 20); do
+            curl -fsS -o /dev/null "https://${{ vars.APP_DOMAIN }}/" && exit 0
+            sleep 5
+          done
+          echo "https://${{ vars.APP_DOMAIN }}/ did not answer" >&2
+          exit 1
