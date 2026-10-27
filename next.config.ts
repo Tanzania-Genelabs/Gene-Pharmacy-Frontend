@@ -15,6 +15,8 @@ const withPWA = withPWAInit({
 
 const nextConfig: NextConfig = {
   reactCompiler: true,
+  // Self-contained server for the Docker image (node server.js, no node_modules needed).
+  output: "standalone",
   compress: true,
   // Required in Next.js 16 — Turbopack is the default; silence the webpack/turbopack conflict
   // error introduced by @ducanh2912/next-pwa injecting a webpack plugin.
