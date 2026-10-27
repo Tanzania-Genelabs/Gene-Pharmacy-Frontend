@@ -3,6 +3,7 @@ import type {
   BillingOverview,
   Page,
   PayForSubscriptionRequest,
+  RequestSubscriptionRequest,
   SubscriptionPaymentResponse,
 } from "@/types";
 
@@ -15,6 +16,10 @@ export const billingApi = {
   /** Sends a mobile-money prompt to the owner's phone for the chosen plan and length. */
   pay: (pharmacyId: string, data: PayForSubscriptionRequest) =>
     api.post<SubscriptionPaymentResponse>(`${base(pharmacyId)}/payments`, data).then((r) => r.data),
+
+  /** Says "I want this plan and I paid by mobile money / cash"; Gene Pharmacy confirms before access starts. */
+  request: (pharmacyId: string, data: RequestSubscriptionRequest) =>
+    api.post<SubscriptionPaymentResponse>(`${base(pharmacyId)}/requests`, data).then((r) => r.data),
 
   payments: (pharmacyId: string, params?: { page?: number; size?: number }) =>
     api.get<Page<SubscriptionPaymentResponse>>(`${base(pharmacyId)}/payments`, { params }).then((r) => r.data),

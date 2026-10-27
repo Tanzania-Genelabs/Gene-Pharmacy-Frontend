@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Banknote, Gift, Loader2, Search, Smartphone, Wallet } from "lucide-react";
+import { Banknote, Check, Gift, Inbox, Loader2, Search, Smartphone, Wallet, X } from "lucide-react";
 import { adminPaymentApi } from "@/api/admin.api";
 import { pharmacyApi } from "@/api/pharmacy.api";
 import { GrantAccessDialog } from "@/components/admin/grant-access-dialog";
@@ -23,17 +23,21 @@ const selectClass =
 const STATUS_BADGE: Record<PaymentStatus, "default" | "secondary" | "destructive" | "outline"> = {
   Completed: "default",
   Pending: "secondary",
+  Requested: "secondary",
   Failed: "destructive",
   Cancelled: "outline",
   Reversed: "outline",
+  Rejected: "destructive",
 };
 
 const STATUS_LABEL: Record<PaymentStatus, string> = {
   Completed: "Received",
   Pending: "Waiting",
+  Requested: "Awaiting confirmation",
   Failed: "Failed",
   Cancelled: "Cancelled",
   Reversed: "Voided",
+  Rejected: "Declined",
 };
 
 const money = (value: string | number) => `TZS ${Number(value).toLocaleString()}`;
@@ -52,6 +56,11 @@ export default function AdminPaymentsPage() {
   const [grantOpen, setGrantOpen] = useState(false);
   const [voiding, setVoiding] = useState<AdminPaymentResponse | null>(null);
   const [voidReason, setVoidReason] = useState("");
+  const [approving, setApproving] = useState<AdminPaymentResponse | null>(null);
+  const [approveAmount, setApproveAmount] = useState("");
+  const [approveReference, setApproveReference] = useState("");
+  const [declining, setDeclining] = useState<AdminPaymentResponse | null>(null);
+  const [declineReason, setDeclineReason] = useState("");
 
   // Wait for a pause in typing before asking the server.
   useEffect(() => {
@@ -92,6 +101,50 @@ export default function AdminPaymentsPage() {
     placeholderData: (previous) => previous,
   });
 
+  // Plan requests from pharmacies, whatever the date range: they stay here until someone decides.
+  const { data: requested } = useQuery({
+    queryKey: ["admin", "payments", "requests"],
+    queryFn: () => adminPaymentApi.list({ status: "Requested", size: 50 }),
+    refetchInterval: 30_000,
+  });
+  const requests = requested?.content ?? [];
+
+  const refreshAll = () => {
+    qc.invalidateQueries({ queryKey: ["admin", "payments"] });
+    qc.invalidateQueries({ queryKey: ["admin", "subscriptions"] });
+  };
+
+  const approveMutation = useMutation({
+    mutationFn: () =>
+      adminPaymentApi.approve(approving!.id, {
+        amount: approveAmount.trim() ? Number(approveAmount) : undefined,
+        reference: approveReference.trim() || undefined,
+      }),
+    onSuccess: ({ payment, subscription }) => {
+      toast.success(`${payment.pharmacyName ?? "The pharmacy"} now has access until ${subscription.endDate}.`);
+      refreshAll();
+      setApproving(null);
+    },
+    onError: (err: unknown) => toast.error(apiErrorMessage(err, "Could not confirm this request")),
+  });
+
+  const declineMutation = useMutation({
+    mutationFn: () => adminPaymentApi.reject(declining!.id, declineReason.trim()),
+    onSuccess: (payment) => {
+      toast.success(`Declined the request from ${payment.pharmacyName ?? "the pharmacy"}.`);
+      refreshAll();
+      setDeclining(null);
+      setDeclineReason("");
+    },
+    onError: (err: unknown) => toast.error(apiErrorMessage(err, "Could not decline this request")),
+  });
+
+  function openApprove(p: AdminPaymentResponse) {
+    setApproving(p);
+    setApproveAmount(String(Number(p.amount)));
+    setApproveReference(p.externalReference ?? "");
+  }
+
   const voidMutation = useMutation({
     mutationFn: () => adminPaymentApi.void(voiding!.id, voidReason.trim()),
     onSuccess: ({ payment }) => {
@@ -105,6 +158,10 @@ export default function AdminPaymentsPage() {
   });
 
   const total = (m: string) => summary?.byMethod.find((x) => x.method === m);
+  const mobileMoney = {
+    total: Number(total("ClickPesa")?.total ?? 0) + Number(total("MobileMoney")?.total ?? 0),
+    count: (total("ClickPesa")?.count ?? 0) + (total("MobileMoney")?.count ?? 0),
+  };
   const rows = data?.content ?? [];
 
   return (
@@ -124,6 +181,46 @@ export default function AdminPaymentsPage() {
 
       <GrantAccessDialog open={grantOpen} onOpenChange={setGrantOpen} />
 
+      {/* Requests waiting for a decision */}
+      {requests.length > 0 && (
+        <Card className="border-amber-300 dark:border-amber-800">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Inbox className="h-5 w-5" /> Plan requests waiting ({requests.length})
+            </CardTitle>
+            <CardDescription>
+              These pharmacies picked a plan and say they paid. Check the money arrived (mobile money or cash), then confirm to switch their access on.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="divide-y">
+            {requests.map((r) => (
+              <div key={r.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
+                <div className="space-y-0.5">
+                  <p className="font-medium">{r.pharmacyName ?? "—"}</p>
+                  <p className="text-sm">
+                    {r.planType} · {r.periodLabel} · <span className="tabular-nums font-semibold">{money(r.amount)}</span>
+                  </p>
+                  <p className="text-xs text-muted-foreground flex flex-wrap items-center gap-2">
+                    <MethodBadge method={r.method} />
+                    {r.externalReference && <>reference <span className="font-mono">{r.externalReference}</span></>}
+                    <span>asked {new Date(r.createdAt).toLocaleString()}</span>
+                    {r.recordedBy && <>by {r.recordedBy}</>}
+                  </p>
+                </div>
+                <div className="flex gap-2">
+                  <Button size="sm" onClick={() => openApprove(r)}>
+                    <Check className="h-4 w-4 mr-1" /> Confirm payment
+                  </Button>
+                  <Button size="sm" variant="outline" className="text-destructive" onClick={() => setDeclining(r)}>
+                    <X className="h-4 w-4 mr-1" /> Decline
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
       {/* Period + totals */}
       <div className="flex flex-wrap items-end gap-3">
         <div className="flex items-center gap-2">
@@ -139,7 +236,7 @@ export default function AdminPaymentsPage() {
 
       <div className="grid gap-4 md:grid-cols-4">
         <Total icon={Wallet} title="Received" value={money(summary?.received ?? 0)} detail={`${summary?.completedCount ?? 0} completed entries`} />
-        <Total icon={Smartphone} title="Mobile money" value={money(total("ClickPesa")?.total ?? 0)} detail={`${total("ClickPesa")?.count ?? 0} payments`} />
+        <Total icon={Smartphone} title="Mobile money" value={money(mobileMoney.total)} detail={`${mobileMoney.count} payments`} />
         <Total icon={Banknote} title="Cash recorded" value={money(total("Cash")?.total ?? 0)} detail={`${total("Cash")?.count ?? 0} payments`} />
         <Total
           icon={Gift}
@@ -157,7 +254,8 @@ export default function AdminPaymentsPage() {
         </div>
         <select aria-label="Method" value={method} onChange={(e) => { setMethod(e.target.value); setPage(0); }} className={`${selectClass} w-44`}>
           <option value="">All methods</option>
-          <option value="ClickPesa">Mobile money</option>
+          <option value="ClickPesa">Mobile money (in the app)</option>
+          <option value="MobileMoney">Mobile money (owner says paid)</option>
           <option value="Cash">Cash</option>
           <option value="Promotion">Promotion</option>
         </select>
@@ -233,6 +331,11 @@ export default function AdminPaymentsPage() {
                         {p.failureReason && p.status !== "Completed" && <p className="mt-0.5 text-destructive">{p.failureReason}</p>}
                       </td>
                       <td className="py-3 text-right">
+                        {p.status === "Requested" && (
+                          <Button variant="ghost" size="sm" onClick={() => openApprove(p)}>
+                            Review
+                          </Button>
+                        )}
                         {p.status === "Completed" && p.method !== "ClickPesa" && (
                           <Button variant="ghost" size="sm" className="text-destructive" onClick={() => setVoiding(p)}>
                             Void
@@ -257,6 +360,65 @@ export default function AdminPaymentsPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Confirm a request */}
+      <Dialog open={!!approving} onOpenChange={(open) => !open && setApproving(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Confirm this payment?</DialogTitle>
+          </DialogHeader>
+          {approving && (
+            <div className="space-y-4 px-6 py-4">
+              <p className="text-sm">
+                <strong>{approving.pharmacyName}</strong> asked for the <strong>{approving.planType}</strong> plan for{" "}
+                <strong>{approving.periodLabel}</strong> and says they paid by{" "}
+                {approving.method === "Cash" ? "cash" : "mobile money"}. Confirming switches their access on straight away.
+              </p>
+              <div className="space-y-1">
+                <Label htmlFor="appr-amount">Amount you received (TZS)</Label>
+                <Input id="appr-amount" type="number" min={1} value={approveAmount} onChange={(e) => setApproveAmount(e.target.value)} />
+                <p className="text-xs text-muted-foreground">Listed price is {money(approving.amount)}. Change it only if you agreed a different amount.</p>
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="appr-ref">Reference / receipt</Label>
+                <Input id="appr-ref" value={approveReference} onChange={(e) => setApproveReference(e.target.value)} maxLength={100} />
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setApproving(null)}>Not yet</Button>
+            <Button disabled={!(Number(approveAmount) > 0) || approveMutation.isPending} onClick={() => approveMutation.mutate()}>
+              {approveMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Confirm and activate"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Decline a request */}
+      <Dialog open={!!declining} onOpenChange={(open) => !open && setDeclining(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Decline this request?</DialogTitle>
+          </DialogHeader>
+          {declining && (
+            <div className="space-y-4 px-6 py-4">
+              <p className="text-sm">
+                <strong>{declining.pharmacyName}</strong> will not get access. They can send a new request.
+              </p>
+              <div className="space-y-1">
+                <Label htmlFor="decl-reason">Reason (the owner will see this) *</Label>
+                <Input id="decl-reason" placeholder="e.g. We did not receive the payment" value={declineReason} onChange={(e) => setDeclineReason(e.target.value)} maxLength={300} />
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeclining(null)}>Cancel</Button>
+            <Button variant="destructive" disabled={declineReason.trim().length < 3 || declineMutation.isPending} onClick={() => declineMutation.mutate()}>
+              {declineMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Decline request"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Void */}
       <Dialog open={!!voiding} onOpenChange={(open) => !open && setVoiding(null)}>

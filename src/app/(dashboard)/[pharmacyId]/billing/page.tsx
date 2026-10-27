@@ -3,7 +3,7 @@
 import { use, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { CheckCircle2, CreditCard, Loader2, XCircle } from "lucide-react";
+import { Banknote, CheckCircle2, Clock, CreditCard, Loader2, Smartphone, XCircle } from "lucide-react";
 import { billingApi } from "@/api/billing.api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -13,7 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { monthlySaving, periodLabel, unitPrice } from "@/lib/billing";
-import type { BillingPeriodUnit, BillingPlan, PaymentStatus, SubscriptionStatus } from "@/types";
+import type { BillingOverview, BillingPeriodUnit, BillingPlan, PaymentStatus, SubscriptionStatus } from "@/types";
 
 interface PageProps {
   params: Promise<{ pharmacyId: string }>;
@@ -32,9 +32,16 @@ const SUBSCRIPTION_BADGE: Record<SubscriptionStatus, "default" | "secondary" | "
 const PAYMENT_BADGE: Record<PaymentStatus, "default" | "secondary" | "destructive" | "outline"> = {
   Completed: "default",
   Pending: "secondary",
+  Requested: "secondary",
   Failed: "destructive",
   Cancelled: "outline",
   Reversed: "outline",
+  Rejected: "destructive",
+};
+
+const PAYMENT_LABEL: Partial<Record<PaymentStatus, string>> = {
+  Requested: "Awaiting confirmation",
+  Rejected: "Declined",
 };
 
 const selectClass =
@@ -115,13 +122,14 @@ export default function BillingPage({ params }: PageProps) {
   }
 
   const subscription = overview?.subscription ?? null;
+  const waitingRequest = history?.content?.find((p) => p.status === "Requested") ?? null;
 
   return (
     <div className="space-y-6">
       <div>
         <h2 className="text-2xl font-bold tracking-tight text-foreground">Billing</h2>
         <p className="text-muted-foreground text-sm mt-1">
-          Your Gene Pharmacy subscription, paid with mobile money.
+          Your Gene Pharmacy subscription. Choose a plan and pay by mobile money or cash.
         </p>
       </div>
 
@@ -164,14 +172,18 @@ export default function BillingPage({ params }: PageProps) {
         <CardHeader>
           <CardTitle className="text-base">Pay or renew</CardTitle>
           <CardDescription>
-            You will get a prompt on your phone; enter your mobile-money PIN to approve it.
+            {overview?.paymentsEnabled
+              ? "You will get a prompt on your phone; enter your mobile-money PIN to approve it."
+              : "Pick a plan, tell us how you paid, and Gene Pharmacy will activate it once the money is confirmed."}
           </CardDescription>
         </CardHeader>
         <CardContent>
           {!overview?.paymentsEnabled ? (
-            <p className="text-sm text-muted-foreground">
-              Online payment is not available yet. Please contact Gene Pharmacy support to renew.
-            </p>
+            overview ? (
+              <RequestPlanForm pharmacyId={pharmacyId} overview={overview} waiting={waitingRequest} />
+            ) : (
+              <p className="text-sm text-muted-foreground">Loading…</p>
+            )
           ) : (
             <form onSubmit={handlePay} className="grid gap-4 sm:grid-cols-2 max-w-2xl">
               <div className="space-y-1 sm:col-span-2">
@@ -261,6 +273,13 @@ export default function BillingPage({ params }: PageProps) {
               </div>
             </form>
           )}
+          {overview?.paymentsEnabled && overview && (
+            <div className="mt-6 border-t pt-6">
+              <p className="font-medium text-sm">Paid another way, or paying cash?</p>
+              <p className="text-xs text-muted-foreground mb-4">Tell Gene Pharmacy which plan you paid for and we will activate it once we confirm the money.</p>
+              <RequestPlanForm pharmacyId={pharmacyId} overview={overview} waiting={waitingRequest} />
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -291,10 +310,13 @@ export default function BillingPage({ params }: PageProps) {
                   <TableCell className="text-right font-semibold">{p.method === "Promotion" ? "Free" : money(p.amount)}</TableCell>
                   <TableCell>
                     {p.method === "Cash" ? "Cash" : p.method === "Promotion" ? "Promotion" : p.channel ?? "Mobile money"}
+                    {p.status === "Rejected" && p.failureReason && (
+                      <span className="block text-xs text-destructive">{p.failureReason}</span>
+                    )}
                   </TableCell>
                   <TableCell className="font-mono text-xs">{p.internalReference}</TableCell>
                   <TableCell>
-                    <Badge variant={PAYMENT_BADGE[p.status]}>{p.status}</Badge>
+                    <Badge variant={PAYMENT_BADGE[p.status]}>{PAYMENT_LABEL[p.status] ?? p.status}</Badge>
                   </TableCell>
                 </TableRow>
               ))}
@@ -372,5 +394,191 @@ export default function BillingPage({ params }: PageProps) {
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+/**
+ * "I want this plan and I paid by mobile money / cash." Nothing is activated until a Gene Pharmacy admin
+ * confirms the money arrived.
+ */
+function RequestPlanForm({
+  pharmacyId,
+  overview,
+  waiting,
+}: {
+  pharmacyId: string;
+  overview: BillingOverview;
+  waiting: { planType: BillingPlan | null; periodLabel: string; amount: string; method: string | null } | null;
+}) {
+  const qc = useQueryClient();
+  const plans = overview.plans;
+  const [planType, setPlanType] = useState<BillingPlan | "">("");
+  const [unit, setUnit] = useState<BillingPeriodUnit>("month");
+  const [count, setCount] = useState(1);
+  const [method, setMethod] = useState<"MobileMoney" | "Cash">("MobileMoney");
+  const [reference, setReference] = useState("");
+
+  const selected = plans.find((p) => p.planType === (planType || plans[0]?.planType));
+  const price = unitPrice(selected, unit);
+  const total = price === null ? 0 : price * count;
+  const sellableByWeek = plans.some((p) => unitPrice(p, "week") !== null);
+
+  const send = useMutation({
+    mutationFn: () =>
+      billingApi.request(pharmacyId, {
+        planType: selected!.planType,
+        periodUnit: unit,
+        periodCount: count,
+        method,
+        reference: reference.trim() || undefined,
+      }),
+    onSuccess: () => {
+      toast.success("Request sent. Gene Pharmacy will activate your plan once the payment is confirmed.");
+      setReference("");
+      qc.invalidateQueries({ queryKey: ["billing", "payments", pharmacyId] });
+    },
+    onError: (err: unknown) => {
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
+      toast.error(msg ?? "Could not send the request");
+    },
+  });
+
+  if (waiting) {
+    return (
+      <div className="flex items-start gap-3 rounded-md border border-amber-300 bg-amber-50 p-4 text-sm dark:border-amber-800 dark:bg-amber-950/30 max-w-2xl">
+        <Clock className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+        <div>
+          <p className="font-medium">Waiting for Gene Pharmacy to confirm your payment</p>
+          <p className="text-muted-foreground">
+            {waiting.planType} plan · {waiting.periodLabel} · {money(waiting.amount)} ({waiting.method === "Cash" ? "cash" : "mobile money"}).
+            Your access starts as soon as it is confirmed.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (plans.length === 0) {
+    return <p className="text-sm text-muted-foreground">No plans are on sale right now. Please contact Gene Pharmacy support.</p>;
+  }
+
+  return (
+    <form
+      className="space-y-5 max-w-2xl"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (selected && price !== null) send.mutate();
+      }}
+    >
+      <div className="space-y-2">
+        <Label>1. Choose a plan</Label>
+        <div className="grid gap-3 sm:grid-cols-3" role="radiogroup" aria-label="Plan">
+          {plans.map((p) => {
+            const weekly = unitPrice(p, "week");
+            const monthly = unitPrice(p, "month");
+            const isSelected = selected?.planType === p.planType;
+            return (
+              <button
+                key={p.planType}
+                type="button"
+                role="radio"
+                aria-checked={isSelected}
+                onClick={() => setPlanType(p.planType)}
+                className={`rounded-md border p-3 text-left transition-colors ${isSelected ? "border-primary bg-primary/5 ring-1 ring-primary" : "hover:bg-muted"}`}
+              >
+                <span className="flex items-center justify-between font-medium">
+                  {p.planType}
+                  {isSelected && <CheckCircle2 className="h-4 w-4 text-primary" />}
+                </span>
+                {monthly !== null && (
+                  <span className="block text-lg font-bold">
+                    {money(monthly)}
+                    <span className="text-xs font-normal text-muted-foreground"> / month</span>
+                  </span>
+                )}
+                {weekly !== null && <span className="block text-xs text-muted-foreground">or {money(weekly)} / week</span>}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="space-y-1">
+          <Label htmlFor="r-unit">2. For how long</Label>
+          <select
+            id="r-unit"
+            className={selectClass}
+            value={unit}
+            onChange={(e) => {
+              setUnit(e.target.value as BillingPeriodUnit);
+              setCount(1);
+            }}
+          >
+            <option value="month">By the month</option>
+            {sellableByWeek && <option value="week">By the week</option>}
+          </select>
+        </div>
+        <div className="space-y-1">
+          <Label htmlFor="r-count">{unit === "week" ? "How many weeks" : "How many months"}</Label>
+          <select id="r-count" className={selectClass} value={count} onChange={(e) => setCount(Number(e.target.value))}>
+            {overview.durations[unit].map((n) => (
+              <option key={n} value={n}>
+                {periodLabel(unit, n)}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+      {price === null && <p className="text-sm text-destructive">The {selected?.planType} plan is not sold by the {unit}.</p>}
+
+      <div className="space-y-2">
+        <Label>3. How did you pay?</Label>
+        <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Payment method">
+          {(
+            [
+              { value: "MobileMoney", label: "Mobile money / payment gateway", hint: "M-Pesa, Tigo Pesa, Airtel Money, Halopesa", Icon: Smartphone },
+              { value: "Cash", label: "Cash", hint: "Paid in person to Gene Pharmacy", Icon: Banknote },
+            ] as const
+          ).map(({ value, label, hint, Icon }) => (
+            <button
+              key={value}
+              type="button"
+              role="radio"
+              aria-checked={method === value}
+              onClick={() => setMethod(value)}
+              className={`rounded-md border p-3 text-left text-sm transition-colors ${method === value ? "border-primary bg-primary/5 ring-1 ring-primary" : "hover:bg-muted"}`}
+            >
+              <span className="flex items-center gap-2 font-medium">
+                <Icon className="h-4 w-4" /> {label}
+              </span>
+              <span className="block text-xs text-muted-foreground">{hint}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="space-y-1">
+        <Label htmlFor="r-ref">{method === "Cash" ? "Receipt number (optional)" : "Transaction ID / reference (optional)"}</Label>
+        <Input
+          id="r-ref"
+          placeholder={method === "Cash" ? "e.g. R-0123" : "e.g. the M-Pesa confirmation code"}
+          value={reference}
+          onChange={(e) => setReference(e.target.value)}
+          maxLength={100}
+        />
+        <p className="text-xs text-muted-foreground">It helps us find your payment quickly.</p>
+      </div>
+
+      <div className="flex items-center justify-between border-t pt-4">
+        <div>
+          <p className="text-xs text-muted-foreground">Total for {periodLabel(unit, count)}</p>
+          <p className="text-xl font-bold">{money(total)}</p>
+        </div>
+        <Button type="submit" disabled={send.isPending || !selected || price === null}>
+          {send.isPending ? "Sending…" : "Send request to Gene Pharmacy"}
+        </Button>
+      </div>
+    </form>
   );
 }

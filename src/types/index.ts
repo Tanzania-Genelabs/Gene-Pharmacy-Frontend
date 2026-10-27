@@ -1144,7 +1144,8 @@ export interface SellerPerformanceResponse {
 // Billing: the pharmacy's own Gene Pharmacy subscription, paid for with ClickPesa mobile money.
 // (ClickPesa is never used at the till.)
 export type BillingPlan = "Basic" | "Standard" | "Premium";
-export type PaymentStatus = "Pending" | "Completed" | "Failed" | "Cancelled" | "Reversed";
+/** Requested = the owner asked for a plan and says they paid; Rejected = Gene Pharmacy declined it. */
+export type PaymentStatus = "Pending" | "Requested" | "Completed" | "Failed" | "Cancelled" | "Reversed" | "Rejected";
 /** A subscription is bought by the week or by the month. */
 export type BillingPeriodUnit = "week" | "month";
 
@@ -1179,7 +1180,7 @@ export interface BillingOverview {
 }
 
 /** How a subscription was paid: mobile money in the app, cash recorded by Gene Pharmacy, or a free promotion. */
-export type PaymentMethod = "ClickPesa" | "Cash" | "Promotion";
+export type PaymentMethod = "ClickPesa" | "MobileMoney" | "Cash" | "Promotion";
 
 export interface SubscriptionPaymentResponse {
   id: string;
@@ -1221,6 +1222,8 @@ export interface AdminPaymentSummary {
   completedCount: number;
   byMethod: { method: PaymentMethod; count: number; total: string }[];
   pendingCount: number;
+  /** Plan requests waiting for a SuperAdmin to confirm the money arrived. */
+  requestedCount: number;
   failedCount: number;
   voidedCount: number;
 }
@@ -1254,6 +1257,17 @@ export interface GrantAccessRequest {
   /** Receipt number for cash. */
   reference?: string;
   /** Required for a promotion (why); optional for cash. Private to Gene Pharmacy staff. */
+  note?: string;
+}
+
+/** The owner picks a plan and says how they paid; a SuperAdmin confirms before access starts. */
+export interface RequestSubscriptionRequest {
+  planType: BillingPlan;
+  periodUnit: BillingPeriodUnit;
+  periodCount: number;
+  method: "MobileMoney" | "Cash";
+  /** Mobile-money transaction ID or cash receipt number, if they have one. */
+  reference?: string;
   note?: string;
 }
 

@@ -160,6 +160,16 @@ export const adminPaymentApi = {
   summary: (params: { from: string; to: string }) =>
     api.get<AdminPaymentSummary>("/api/v1/admin/payments/summary", { params }).then((r) => r.data),
 
+  /** Confirms a plan request: the money arrived, so the pharmacy gets its period. The amount defaults to the list price. */
+  approve: (paymentId: string, data?: { amount?: number; reference?: string }) =>
+    api
+      .post<{ payment: AdminPaymentResponse; subscription: AdminSubscriptionRow }>(`/api/v1/admin/payments/${paymentId}/approve`, data ?? {})
+      .then((r) => r.data),
+
+  /** Declines a plan request; the reason is shown to the owner. */
+  reject: (paymentId: string, reason: string) =>
+    api.post<AdminPaymentResponse>(`/api/v1/admin/payments/${paymentId}/reject`, { reason }).then((r) => r.data),
+
   /** Undoes a mistaken cash/promotion entry (takes its weeks/months back). Mobile-money payments cannot be voided here. */
   void: (paymentId: string, reason: string) =>
     api

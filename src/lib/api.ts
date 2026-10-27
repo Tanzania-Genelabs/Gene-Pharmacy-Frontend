@@ -8,6 +8,8 @@ import { sessionClient } from "@/lib/session-client";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
+export const SUBSCRIPTION_REQUIRED_EVENT = "gene:subscription-required";
+
 /** Singleton Axios instance for all API calls. */
 export const api = axios.create({
   baseURL: API_URL,
@@ -46,6 +48,15 @@ api.interceptors.response.use(
     const originalRequest = error.config as AxiosRequestConfig & {
       _retry?: boolean;
     };
+
+    // The pharmacy has no running subscription: the dashboard layout shows the "subscribe" screen.
+    if (
+      error.response?.status === 402 &&
+      (error.response.data as { errorCode?: string } | undefined)?.errorCode === "SUBSCRIPTION_REQUIRED" &&
+      typeof window !== "undefined"
+    ) {
+      window.dispatchEvent(new Event(SUBSCRIPTION_REQUIRED_EVENT));
+    }
 
     const is401 = error.response?.status === 401;
     const isRefreshEndpoint = originalRequest.url?.includes("/auth/refresh");
