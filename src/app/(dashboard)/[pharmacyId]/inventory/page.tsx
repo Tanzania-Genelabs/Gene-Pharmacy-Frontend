@@ -87,6 +87,7 @@ export default function InventoryPage({ params }: PageProps) {
       qc.invalidateQueries({ queryKey: ["inventory", pharmacyId] });
       setShowAdjust(false);
       setAdjustForm({ drugId: "", branchId: "", movementType: "Adjustment", adjustmentQuantity: 0, notes: "" });
+      qc.invalidateQueries({ queryKey: ["expiry"] });
     },
     onError: (err: unknown) => {
       const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
@@ -126,6 +127,9 @@ export default function InventoryPage({ params }: PageProps) {
     transferMutation.mutate(transferForm);
   }
 
+  // Expiry only makes sense for units coming in, not for removals or write-offs.
+  const addingStock = adjustForm.movementType !== "Expiry" && adjustForm.adjustmentQuantity > 0;
+
   function openAdjustForRow(drugId: string, branchId: string) {
     setAdjustForm((f) => ({ ...f, drugId, branchId }));
     setShowAdjust(true);
@@ -141,7 +145,7 @@ export default function InventoryPage({ params }: PageProps) {
       toast.error("Quantity cannot be zero");
       return;
     }
-    adjustMutation.mutate(adjustForm);
+    adjustMutation.mutate(addingStock ? adjustForm : { ...adjustForm, expiryDate: undefined, batchNumber: undefined });
   }
 
   return (
@@ -238,6 +242,34 @@ export default function InventoryPage({ params }: PageProps) {
                 onChange={(units) => setAdjustForm((f) => ({ ...f, adjustmentQuantity: units }))}
               />
             </div>
+
+            {addingStock && (
+              <div className="grid grid-cols-2 gap-3 rounded-md border border-dashed p-3">
+                <div className="space-y-1">
+                  <Label htmlFor="adj-expiry">Expiry date</Label>
+                  <Input
+                    id="adj-expiry"
+                    type="date"
+                    min={new Date().toISOString().split("T")[0]}
+                    value={adjustForm.expiryDate ?? ""}
+                    onChange={(e) => setAdjustForm((f) => ({ ...f, expiryDate: e.target.value }))}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="adj-batch">Batch number</Label>
+                  <Input
+                    id="adj-batch"
+                    placeholder="Optional"
+                    value={adjustForm.batchNumber ?? ""}
+                    maxLength={100}
+                    onChange={(e) => setAdjustForm((f) => ({ ...f, batchNumber: e.target.value }))}
+                  />
+                </div>
+                <p className="col-span-2 text-xs text-muted-foreground">
+                  Optional. Add the expiry date printed on the pack so these units show up in the expiry alerts.
+                </p>
+              </div>
+            )}
 
             <div className="space-y-1">
               <Label htmlFor="adj-notes">Notes</Label>

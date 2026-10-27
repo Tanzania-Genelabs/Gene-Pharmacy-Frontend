@@ -29,6 +29,8 @@ export const inventoryApi = {
         movementType: data.movementType,
         quantity: data.adjustmentQuantity,
         notes: data.notes,
+        expiryDate: data.expiryDate || undefined,
+        batchNumber: data.batchNumber?.trim() || undefined,
       })
       .then((r) => r.data),
 

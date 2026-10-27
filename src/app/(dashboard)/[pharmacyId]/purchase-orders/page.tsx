@@ -9,7 +9,8 @@ import { drugApi } from "@/api/drug.api";
 import { PackQuantityField } from "@/components/inventory/pack-quantity-field";
 import { formatQuantity, packInfo } from "@/lib/packs";
 import { toast } from "sonner";
-import { Plus, FileText, MoreHorizontal, Trash2 } from "lucide-react";
+import { Plus, FileText, MoreHorizontal, Trash2, PackageCheck, Loader2 } from "lucide-react";
+import { apiErrorMessage } from "@/lib/errors";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -29,6 +30,7 @@ import {
 } from "@/components/ui/dialog";
 import type {
   PurchaseOrderStatus, CreatePurchaseOrderRequest, PurchaseOrderItemRequest,
+  PurchaseOrderResponse, ReceiveItemRequest,
 } from "@/types";
 
 interface PageProps {
@@ -76,6 +78,7 @@ export default function PurchaseOrdersPage({ params }: PageProps) {
   const [showAdd, setShowAdd] = useState(false);
   const [form, setForm] = useState<CreatePurchaseOrderRequest>(emptyForm());
   const [lineItem, setLineItem] = useState<PurchaseOrderItemRequest>(emptyLine());
+  const [receivingId, setReceivingId] = useState<string | null>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ["purchase-orders", pharmacyId, page],
@@ -129,6 +132,19 @@ export default function PurchaseOrdersPage({ params }: PageProps) {
       qc.invalidateQueries({ queryKey: ["purchase-orders", pharmacyId] });
     },
     onError: () => toast.error("Failed to cancel order"),
+  });
+
+  const receiveMutation = useMutation({
+    mutationFn: ({ orderId, items }: { orderId: string; items: ReceiveItemRequest[] }) =>
+      purchaseOrderApi.receiveItems(pharmacyId, orderId, items),
+    onSuccess: () => {
+      toast.success("Delivery received into stock");
+      qc.invalidateQueries({ queryKey: ["purchase-orders", pharmacyId] });
+      qc.invalidateQueries({ queryKey: ["inventory", pharmacyId] });
+      qc.invalidateQueries({ queryKey: ["expiry"] });
+      setReceivingId(null);
+    },
+    onError: (err: unknown) => toast.error(apiErrorMessage(err, "Could not receive this delivery")),
   });
 
   function addLineItem() {
@@ -422,6 +438,12 @@ export default function PurchaseOrdersPage({ params }: PageProps) {
                               Confirm Order
                             </DropdownMenuItem>
                           )}
+                          {["Ordered", "PartiallyReceived"].includes(order.status) && (
+                            <DropdownMenuItem onClick={() => setReceivingId(order.id)}>
+                              <PackageCheck className="h-4 w-4 mr-2" />
+                              Receive Delivery
+                            </DropdownMenuItem>
+                          )}
                           <DropdownMenuSeparator />
                           {["Draft", "Ordered"].includes(order.status) && (
                             <DropdownMenuItem
@@ -442,6 +464,14 @@ export default function PurchaseOrdersPage({ params }: PageProps) {
         </CardContent>
       </Card>
 
+      <ReceiveDialog
+        pharmacyId={pharmacyId}
+        orderId={receivingId}
+        saving={receiveMutation.isPending}
+        onClose={() => setReceivingId(null)}
+        onSubmit={(orderId, items) => receiveMutation.mutate({ orderId, items })}
+      />
+
       {data && data.totalPages > 1 && (
         <div className="flex justify-end gap-2">
           <Button variant="outline" size="sm" disabled={data.first} onClick={() => setPage((p) => p - 1)}>
@@ -456,5 +486,150 @@ export default function PurchaseOrdersPage({ params }: PageProps) {
         </div>
       )}
     </div>
+  );
+}
+
+const todayIso = new Date().toISOString().split("T")[0];
+
+interface ReceiveLine {
+  drugId: string;
+  quantity: string;
+  batchNumber: string;
+  expiryDate: string;
+}
+
+/**
+ * What actually arrived: how many of each line, and the batch number and expiry date printed on the boxes.
+ * Lines with an expiry date are recorded as batches, so the expiry alerts can see them.
+ */
+function ReceiveDialog({
+  pharmacyId,
+  orderId,
+  saving,
+  onClose,
+  onSubmit,
+}: {
+  pharmacyId: string;
+  orderId: string | null;
+  saving: boolean;
+  onClose: () => void;
+  onSubmit: (orderId: string, items: ReceiveItemRequest[]) => void;
+}) {
+  const { data: order, isLoading } = useQuery({
+    queryKey: ["purchase-orders", pharmacyId, "detail", orderId],
+    queryFn: () => purchaseOrderApi.getById(pharmacyId, orderId!),
+    enabled: !!orderId,
+  });
+
+  return (
+    <Dialog open={!!orderId} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="sm:max-w-3xl max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Receive delivery{order ? ` · ${order.orderNumber}` : ""}</DialogTitle>
+        </DialogHeader>
+        {isLoading || !order ? (
+          <div className="flex justify-center py-12">
+            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+          </div>
+        ) : (
+          // Keyed by order so the lines start fresh for each delivery.
+          <ReceiveForm key={order.id} order={order} saving={saving} onClose={onClose} onSubmit={onSubmit} />
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ReceiveForm({
+  order,
+  saving,
+  onClose,
+  onSubmit,
+}: {
+  order: PurchaseOrderResponse;
+  saving: boolean;
+  onClose: () => void;
+  onSubmit: (orderId: string, items: ReceiveItemRequest[]) => void;
+}) {
+  const open = order.items.filter((i) => i.quantityOrdered - i.quantityReceived > 0);
+  // Everything still outstanding is assumed to have arrived; change what did not.
+  const [lines, setLines] = useState<ReceiveLine[]>(
+    open.map((i) => ({ drugId: i.drugId, quantity: String(i.quantityOrdered - i.quantityReceived), batchNumber: "", expiryDate: "" })),
+  );
+
+  const patch = (idx: number, change: Partial<ReceiveLine>) =>
+    setLines((ls) => ls.map((l, i) => (i === idx ? { ...l, ...change } : l)));
+
+  function submit(e: React.FormEvent) {
+    e.preventDefault();
+    const items: ReceiveItemRequest[] = [];
+    for (const [idx, line] of lines.entries()) {
+      const qty = Number(line.quantity);
+      if (!qty) continue;
+      const outstanding = open[idx].quantityOrdered - open[idx].quantityReceived;
+      if (!Number.isInteger(qty) || qty < 0 || qty > outstanding) {
+        toast.error(`${open[idx].drugName}: enter a whole number from 0 to ${outstanding}`);
+        return;
+      }
+      items.push({
+        drugId: line.drugId,
+        quantityReceived: qty,
+        expiryDate: line.expiryDate || undefined,
+        batchNumber: line.batchNumber.trim() || undefined,
+      });
+    }
+    if (items.length === 0) {
+      toast.error("Enter how many units arrived");
+      return;
+    }
+    onSubmit(order.id, items);
+  }
+
+  return (
+    <form onSubmit={submit} className="space-y-4 py-2">
+      <p className="text-sm text-muted-foreground">
+        Enter what arrived. Add the <strong>expiry date</strong> printed on the boxes so the units appear in the expiry alerts.
+      </p>
+      <div className="space-y-3">
+        {open.map((item, idx) => {
+          const outstanding = item.quantityOrdered - item.quantityReceived;
+          return (
+            <div key={item.id} className="grid grid-cols-12 items-end gap-3 rounded-md border p-3">
+              <div className="col-span-12 sm:col-span-4">
+                <p className="font-medium text-sm">{item.drugName}</p>
+                <p className="text-xs text-muted-foreground">
+                  {item.quantityReceived} of {item.quantityOrdered} received · {outstanding} to come
+                </p>
+              </div>
+              <div className="col-span-4 sm:col-span-2 space-y-1">
+                <Label htmlFor={`rq-${idx}`} className="text-xs">Arrived now</Label>
+                <Input
+                  id={`rq-${idx}`}
+                  type="number"
+                  min={0}
+                  max={outstanding}
+                  value={lines[idx].quantity}
+                  onChange={(e) => patch(idx, { quantity: e.target.value })}
+                />
+              </div>
+              <div className="col-span-4 sm:col-span-3 space-y-1">
+                <Label htmlFor={`rb-${idx}`} className="text-xs">Batch number</Label>
+                <Input id={`rb-${idx}`} placeholder="Optional" maxLength={100} value={lines[idx].batchNumber} onChange={(e) => patch(idx, { batchNumber: e.target.value })} />
+              </div>
+              <div className="col-span-4 sm:col-span-3 space-y-1">
+                <Label htmlFor={`re-${idx}`} className="text-xs">Expiry date</Label>
+                <Input id={`re-${idx}`} type="date" min={todayIso} value={lines[idx].expiryDate} onChange={(e) => patch(idx, { expiryDate: e.target.value })} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <DialogFooter>
+        <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
+        <Button type="submit" disabled={saving}>
+          {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : "Receive into stock"}
+        </Button>
+      </DialogFooter>
+    </form>
   );
 }

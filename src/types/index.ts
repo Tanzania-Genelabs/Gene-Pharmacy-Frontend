@@ -437,6 +437,10 @@ export interface StockAdjustmentRequest {
   movementType: "Adjustment" | "Expiry" | "Return";
   adjustmentQuantity: number;
   notes?: string;
+  /** When adding stock: the expiry date of these units (YYYY-MM-DD). Creates a batch with them. */
+  expiryDate?: string;
+  /** Printed on the box; generated when left empty. */
+  batchNumber?: string;
 }
 
 export interface StockTransferRequest {
@@ -664,7 +668,9 @@ export interface CreatePurchaseOrderRequest {
 export interface ReceiveItemRequest {
   drugId: string;
   quantityReceived: number;
+  /** Expiry date printed on the delivery (YYYY-MM-DD). Creates a batch with the received units. */
   expiryDate?: string;
+  batchNumber?: string;
 }
 
 export interface PurchaseOrderSummaryResponse {
@@ -923,7 +929,8 @@ export interface StockBatchResponse {
 export interface CreateStockBatchRequest {
   drugId: string;
   branchId: string;
-  batchNumber: string;
+  /** Generated when left empty. */
+  batchNumber?: string;
   expiryDate: string;
   initialQuantity: number;
 }
@@ -1200,6 +1207,8 @@ export interface SubscriptionPaymentResponse {
   currency: string;
   phoneNumber: string | null;
   internalReference: string;
+  /** The owner's own reference: mobile-money transaction ID or cash receipt number. */
+  externalReference: string | null;
   failureReason: string | null;
   createdAt: string;
   completedAt: string | null;
