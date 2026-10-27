@@ -5,6 +5,7 @@ import type {
   CreatePharmacyRequest,
   UpdatePharmacyRequest,
   PharmacyStatus,
+  PharmacyLimits,
 } from "@/types";
 
 export const pharmacyApi = {
@@ -43,4 +44,14 @@ export const pharmacyApi = {
 
   reactivate: (pharmacyId: string) =>
     api.post(`/api/v1/pharmacies/${pharmacyId}/reactivate`).then((r) => r.data),
+
+  /** SuperAdmin: the account / branch limits that apply to one pharmacy and how much it uses. */
+  getLimits: (pharmacyId: string) =>
+    api.get<PharmacyLimits>(`/api/v1/pharmacies/${pharmacyId}/limits`).then((r) => r.data),
+
+  /** SuperAdmin: a number sets this pharmacy's own limit, null makes it unlimited, useDefault hands it back to the plan. */
+  updateLimits: (
+    pharmacyId: string,
+    data: { maxUsers?: number | null; maxBranches?: number | null; useDefault?: ("maxUsers" | "maxBranches")[] },
+  ) => api.put<PharmacyLimits>(`/api/v1/pharmacies/${pharmacyId}/limits`, data).then((r) => r.data),
 };

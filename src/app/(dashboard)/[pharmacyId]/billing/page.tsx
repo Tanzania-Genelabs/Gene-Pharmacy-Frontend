@@ -448,6 +448,10 @@ function Checkout({
                     <span className="block text-xs text-muted-foreground">
                       {each === null ? `Not sold by the ${unit}` : `per ${unit}`}
                     </span>
+                    <span className="mt-2 block text-xs text-muted-foreground">
+                      {p.maxUsers === null ? "Unlimited accounts" : `Up to ${p.maxUsers} accounts`} ·{" "}
+                      {p.maxBranches === null ? "unlimited branches" : `${p.maxBranches} ${p.maxBranches === 1 ? "branch" : "branches"}`}
+                    </span>
                   </button>
                 );
               })}

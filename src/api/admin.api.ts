@@ -128,8 +128,11 @@ export const adminBillingPlanApi = {
   list: () =>
     api.get<AdminBillingPlan[]>("/api/v1/admin/billing-plans").then((r) => r.data),
 
-  /** Changes a plan's monthly price (whole TZS) and/or whether it can be bought. */
-  update: (planType: BillingPlan, data: { monthlyPrice?: number; weeklyPrice?: number | null; active?: boolean }) =>
+  /** Changes a plan's prices (whole TZS), its account / branch limits (null = unlimited) and/or whether it can be bought. */
+  update: (
+    planType: BillingPlan,
+    data: { monthlyPrice?: number; weeklyPrice?: number | null; maxUsers?: number | null; maxBranches?: number | null; active?: boolean },
+  ) =>
     api
       .put<AdminBillingPlan>(`/api/v1/admin/billing-plans/${planType}`, data)
       .then((r) => r.data),

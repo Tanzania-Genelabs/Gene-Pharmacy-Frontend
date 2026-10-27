@@ -1163,6 +1163,10 @@ export interface AdminBillingPlan {
   monthlyPrice: string;
   /** Whole TZS per week; null when the plan is not sold weekly. */
   weeklyPrice: string | null;
+  /** Most active accounts (owner included) the plan allows; null means unlimited. */
+  maxUsers: number | null;
+  /** Most active branches the plan allows; null means unlimited. */
+  maxBranches: number | null;
   active: boolean;
   updatedBy: string | null;
   updatedAt: string | null;
@@ -1174,6 +1178,10 @@ export interface BillingPlanOffer {
   monthlyPrice: string;
   /** Whole TZS per week, as a string; null when this plan is only sold monthly. */
   weeklyPrice: string | null;
+  /** Most active accounts (owner included) the plan allows; null means unlimited. */
+  maxUsers: number | null;
+  /** Most active branches the plan allows; null means unlimited. */
+  maxBranches: number | null;
 }
 
 export interface BillingOverview {
@@ -1332,4 +1340,13 @@ export interface AdminSubscriptionStats {
   gracePeriod: number;
   expired: number;
   suspended: number;
+}
+
+/** What limits apply to one pharmacy: its plan's, any override the SuperAdmin set, and current usage. Null limit = unlimited. */
+export interface PharmacyLimits {
+  planType: BillingPlan | null;
+  plan: { maxUsers: number | null; maxBranches: number | null };
+  overrides: { maxUsers: boolean; maxBranches: boolean };
+  effective: { maxUsers: number | null; maxBranches: number | null };
+  usage: { users: number; branches: number };
 }

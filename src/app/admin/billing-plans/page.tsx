@@ -20,6 +20,8 @@ function PlanRow({ plan }: { plan: AdminBillingPlan }) {
   const qc = useQueryClient();
   const [monthly, setMonthly] = useState(plan.monthlyPrice);
   const [weekly, setWeekly] = useState(plan.weeklyPrice ?? "");
+  const [maxUsers, setMaxUsers] = useState(plan.maxUsers?.toString() ?? "");
+  const [maxBranches, setMaxBranches] = useState(plan.maxBranches?.toString() ?? "");
   const [active, setActive] = useState(plan.active);
 
   const monthlyNumber = Number(monthly);
@@ -27,7 +29,16 @@ function PlanRow({ plan }: { plan: AdminBillingPlan }) {
   // Weekly is optional: empty means "not sold weekly".
   const weeklyNumber = Number(weekly);
   const weeklyValid = weekly.trim() === "" || (Number.isInteger(weeklyNumber) && weeklyNumber >= 1);
-  const dirty = monthly !== plan.monthlyPrice || weekly !== (plan.weeklyPrice ?? "") || active !== plan.active;
+  // Limits are optional too: empty means unlimited.
+  const limitValid = (value: string) => value.trim() === "" || (Number.isInteger(Number(value)) && Number(value) >= 1);
+  const usersValid = limitValid(maxUsers);
+  const branchesValid = limitValid(maxBranches);
+  const dirty =
+    monthly !== plan.monthlyPrice ||
+    weekly !== (plan.weeklyPrice ?? "") ||
+    maxUsers !== (plan.maxUsers?.toString() ?? "") ||
+    maxBranches !== (plan.maxBranches?.toString() ?? "") ||
+    active !== plan.active;
 
   // What 4 weeks costs compared with a month: shown so you can see the premium paid for flexibility.
   const fourWeeks = weekly.trim() !== "" && weeklyValid ? weeklyNumber * 4 : null;
@@ -38,6 +49,8 @@ function PlanRow({ plan }: { plan: AdminBillingPlan }) {
       adminBillingPlanApi.update(plan.planType as BillingPlan, {
         monthlyPrice: monthlyNumber,
         weeklyPrice: weekly.trim() === "" ? null : weeklyNumber,
+        maxUsers: maxUsers.trim() === "" ? null : Number(maxUsers),
+        maxBranches: maxBranches.trim() === "" ? null : Number(maxBranches),
         active,
       }),
     onSuccess: (saved) => {
@@ -91,6 +104,34 @@ function PlanRow({ plan }: { plan: AdminBillingPlan }) {
         )}
       </TableCell>
       <TableCell>
+        <Input
+          type="number"
+          min={1}
+          step={1}
+          inputMode="numeric"
+          aria-label={`${plan.planType} user limit`}
+          placeholder="unlimited"
+          value={maxUsers}
+          onChange={(e) => setMaxUsers(e.target.value)}
+          className={`max-w-28 ${usersValid ? "" : "border-destructive"}`}
+        />
+        {!usersValid && <p className="text-xs text-destructive mt-1">Whole number, at least 1 (or empty)</p>}
+      </TableCell>
+      <TableCell>
+        <Input
+          type="number"
+          min={1}
+          step={1}
+          inputMode="numeric"
+          aria-label={`${plan.planType} branch limit`}
+          placeholder="unlimited"
+          value={maxBranches}
+          onChange={(e) => setMaxBranches(e.target.value)}
+          className={`max-w-28 ${branchesValid ? "" : "border-destructive"}`}
+        />
+        {!branchesValid && <p className="text-xs text-destructive mt-1">Whole number, at least 1 (or empty)</p>}
+      </TableCell>
+      <TableCell>
         <label className="inline-flex items-center gap-2 text-sm cursor-pointer">
           <input
             type="checkbox"
@@ -113,7 +154,7 @@ function PlanRow({ plan }: { plan: AdminBillingPlan }) {
         )}
       </TableCell>
       <TableCell className="text-right">
-        <Button size="sm" disabled={!dirty || !monthlyValid || !weeklyValid || save.isPending} onClick={() => save.mutate()}>
+        <Button size="sm" disabled={!dirty || !monthlyValid || !weeklyValid || !usersValid || !branchesValid || save.isPending} onClick={() => save.mutate()}>
           {save.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save"}
         </Button>
       </TableCell>
@@ -145,7 +186,9 @@ export default function AdminBillingPlansPage() {
             little higher than a quarter of the month, so weekly is a convenience and monthly stays the better deal. Leave the
             weekly price empty to sell a plan only monthly. A change applies to payments started afterwards; a payment already
             waiting for approval keeps the price it was created with. Switching a plan off hides it from pharmacies but does not
-            affect those already on it.
+            affect those already on it. <strong>Max accounts</strong> counts the owner and every active staff account;{" "}
+            <strong>Max branches</strong> counts active branches. Leave a limit empty for unlimited. When a pharmacy reaches its
+            limit it cannot add another until it deactivates one or upgrades; nothing it already has is switched off.
           </CardDescription>
         </CardHeader>
         <CardContent className="p-0">
@@ -155,6 +198,8 @@ export default function AdminBillingPlansPage() {
                 <TableHead>Plan</TableHead>
                 <TableHead>Weekly price</TableHead>
                 <TableHead>Monthly price</TableHead>
+                <TableHead>Max accounts</TableHead>
+                <TableHead>Max branches</TableHead>
                 <TableHead>Availability</TableHead>
                 <TableHead>Last changed by</TableHead>
                 <TableHead className="w-24" />
@@ -163,7 +208,7 @@ export default function AdminBillingPlansPage() {
             <TableBody>
               {isLoading && (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
+                  <TableCell colSpan={8} className="text-center text-muted-foreground py-8">
                     <Loader2 className="h-5 w-5 animate-spin inline mr-2" />
                     Loading…
                   </TableCell>
@@ -171,7 +216,7 @@ export default function AdminBillingPlansPage() {
               )}
               {/* key includes the saved values so a row resets its draft after a successful save */}
               {plans?.map((plan) => (
-                <PlanRow key={`${plan.planType}-${plan.monthlyPrice}-${plan.weeklyPrice}-${plan.active}`} plan={plan} />
+                <PlanRow key={`${plan.planType}-${plan.monthlyPrice}-${plan.weeklyPrice}-${plan.maxUsers}-${plan.maxBranches}-${plan.active}`} plan={plan} />
               ))}
             </TableBody>
           </Table>

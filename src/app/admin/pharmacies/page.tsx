@@ -14,6 +14,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { toast } from "sonner";
+import { PharmacyLimitsDialog } from "@/components/admin/pharmacy-limits-dialog";
 import {
   Building2,
   Search,
@@ -22,6 +23,7 @@ import {
   XCircle,
   Pause,
   Play,
+  SlidersHorizontal,
   Loader2,
 } from "lucide-react";
 import type { PharmacyResponse, PharmacyStatus } from "@/types";
@@ -48,6 +50,7 @@ export default function AdminPharmaciesPage() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [page, setPage] = useState(0);
+  const [limitsFor, setLimitsFor] = useState<PharmacyResponse | null>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ["admin", "pharmacies", statusFilter, page],
@@ -191,6 +194,9 @@ export default function AdminPharmaciesPage() {
                                 </DropdownMenuItem>
                               </>
                             )}
+                            <DropdownMenuItem onClick={() => setLimitsFor(p)}>
+                              <SlidersHorizontal className="mr-2 h-4 w-4" /> Plan limits…
+                            </DropdownMenuItem>
                             {p.status === "Active" && (
                               <DropdownMenuItem onClick={() => suspendMutation.mutate(p.id)}>
                                 <Pause className="mr-2 h-4 w-4 text-orange-500" /> Suspend
@@ -229,6 +235,12 @@ export default function AdminPharmaciesPage() {
           )}
         </CardContent>
       </Card>
+
+      <PharmacyLimitsDialog
+        pharmacyId={limitsFor?.id ?? null}
+        pharmacyName={limitsFor?.name}
+        onOpenChange={(open) => { if (!open) setLimitsFor(null); }}
+      />
     </div>
   );
 }
