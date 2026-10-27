@@ -5,6 +5,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { salesApi } from "@/api/sales.api";
 import { drugApi, drugCategoryApi } from "@/api/drug.api";
 import { branchApi } from "@/api/branch.api";
+import { inventoryApi } from "@/api/inventory.api";
 import { useAuthStore } from "@/store/auth.store";
 import { toast } from "sonner";
 import {
@@ -163,18 +164,49 @@ export default function SalesPage({ params }: PageProps) {
     return { subtotal: sub, totalDiscount: disc, netTotal: sub - disc };
   }, [cart]);
 
+  // What is on the shelf at the chosen branch. A drug with no stock record there has none to sell.
+  const { data: stockPage, isLoading: stockLoading } = useQuery({
+    queryKey: ["inventory", pharmacyId, "branch", branchId, "all"],
+    queryFn: () => inventoryApi.list(pharmacyId, { branchId, size: 500 }),
+    enabled: !!branchId,
+  });
+  const stockByDrug = useMemo(() => new Map((stockPage?.content ?? []).map((s) => [s.drugId, s])), [stockPage]);
+
+  /** How many units can be sold, whether it is running low, and whether that is known yet. */
+  const stockOf = useCallback((drug: Pick<DrugResponse, "id" | "reorderLevel">) => {
+    const row = stockByDrug.get(drug.id);
+    const quantity = Math.max(0, row?.quantity ?? 0);
+    const reorderLevel = row?.reorderLevel ?? drug.reorderLevel ?? 0;
+    const known = !!branchId && !stockLoading;
+    return { known, quantity, out: known && quantity <= 0, low: known && quantity > 0 && quantity <= reorderLevel };
+  }, [stockByDrug, stockLoading, branchId]);
+
   /** `units` is in single units; pass the pack size to add a whole pack. */
   const addToCart = useCallback((drug: DrugResponse, units = 1) => {
     if (!branchId) { toast.error("Select a branch first"); return; }
+    const stock = stockOf(drug);
+    const inCartNow = cart.find((i) => i.drugId === drug.id)?.quantity ?? 0;
+    if (stock.out) { toast.error(`${drug.name} is out of stock at this branch`); return; }
+    if (stock.known && inCartNow + units > stock.quantity) {
+      toast.warning(`Only ${stock.quantity} ${drug.unit}${stock.quantity === 1 ? "" : "s"} of ${drug.name} in stock`);
+      return;
+    }
     setCart((prev) => {
       const idx = prev.findIndex((i) => i.drugId === drug.id);
       if (idx >= 0) { const n = [...prev]; n[idx] = { ...n[idx], quantity: n[idx].quantity + units }; return n; }
       return [...prev, { drugId: drug.id, drugName: drug.name, unitPrice: drug.sellingPrice, quantity: units, discountPct: 0, info: packInfo(drug) }];
     });
-  }, [branchId]);
+  }, [branchId, cart, stockOf]);
 
   function updateQty(drugId: string, qty: number) {
     if (qty <= 0) { setCart((p) => p.filter((i) => i.drugId !== drugId)); return; }
+    const row = stockByDrug.get(drugId);
+    if (!stockLoading && branchId && qty > Math.max(0, row?.quantity ?? 0)) {
+      const max = Math.max(0, row?.quantity ?? 0);
+      toast.warning(`Only ${max} in stock`);
+      qty = max;
+      if (qty <= 0) { setCart((p) => p.filter((i) => i.drugId !== drugId)); return; }
+    }
     setCart((p) => p.map((i) => i.drugId === drugId ? { ...i, quantity: qty } : i));
   }
   function updateDiscountPct(drugId: string, pct: number) {
@@ -185,6 +217,7 @@ export default function SalesPage({ params }: PageProps) {
     mutationFn: (data: CreateSaleRequest) => salesApi.create(pharmacyId, data),
     onSuccess: (sale) => {
       toast.success(`Sale ${sale.receiptNumber} completed!`);
+      qc.invalidateQueries({ queryKey: ["inventory", pharmacyId] });
       // Build drug name map from cart for receipt display
       const names: Record<string, string> = {};
       cart.forEach((i) => { names[i.drugId] = i.drugName; });
@@ -361,16 +394,22 @@ export default function SalesPage({ params }: PageProps) {
                 <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3 mt-2">
                   {drugs.map((drug) => {
                     const inCart = cart.find((i) => i.drugId === drug.id);
+                    const stock = stockOf(drug);
                     return (
                       <div
                         key={drug.id}
                         role="button"
-                        tabIndex={0}
-                        onClick={() => addToCart(drug)}
-                        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); addToCart(drug); } }}
-                        className={`group relative cursor-pointer text-left rounded-xl border p-3 transition-all hover:shadow-md hover:border-primary focus:outline-none focus:ring-2 focus:ring-primary ${
-                          hasPacks(packInfo(drug)) ? "pb-9" : ""
-                        } ${inCart ? "border-primary bg-primary/5" : "border-border bg-card hover:bg-accent/30"}`}
+                        tabIndex={stock.out ? -1 : 0}
+                        aria-disabled={stock.out}
+                        onClick={() => !stock.out && addToCart(drug)}
+                        onKeyDown={(e) => { if (!stock.out && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); addToCart(drug); } }}
+                        className={`group relative text-left rounded-xl border p-3 transition-all focus:outline-none ${
+                          stock.out
+                            ? "cursor-not-allowed border-border bg-card"
+                            : "cursor-pointer hover:shadow-md hover:border-primary focus:ring-2 focus:ring-primary"
+                        } ${hasPacks(packInfo(drug)) ? "pb-9" : ""} ${
+                          inCart ? "border-primary bg-primary/5" : stock.out ? "" : "border-border bg-card hover:bg-accent/30"
+                        }`}
                       >
                         {inCart && (
                           <div className="absolute top-2 right-2 bg-primary text-primary-foreground text-[10px] font-bold rounded-full w-5 h-5 flex items-center justify-center">
@@ -384,11 +423,14 @@ export default function SalesPage({ params }: PageProps) {
                         {drug.genericName && <p className="text-[10px] text-muted-foreground truncate mb-1">{drug.genericName}</p>}
                         <p className="text-sm font-bold text-primary">TZS {fmt(drug.sellingPrice)}</p>
                         <p className="text-[10px] text-muted-foreground">per {drug.unit}</p>
+                        {stock.out && <Badge variant="destructive" className="mt-1.5">Out of stock</Badge>}
+                        {stock.low && <Badge className="mt-1.5 border-transparent bg-amber-500 text-white hover:bg-amber-500">Low · {stock.quantity} left</Badge>}
                         {hasPacks(packInfo(drug)) && (
                           <button
                             type="button"
+                            disabled={stock.out || (stock.known && stock.quantity < drug.unitsPerPack)}
                             onClick={(e) => { e.stopPropagation(); addToCart(drug, drug.unitsPerPack); }}
-                            className="mt-1.5 w-full rounded-md border border-primary/40 py-0.5 text-[10px] font-medium text-primary hover:bg-primary/10"
+                            className="mt-1.5 w-full rounded-md border border-primary/40 py-0.5 text-[10px] font-medium text-primary hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
                           >
                             + 1 {packLabel(packInfo(drug))} ({drug.unitsPerPack}) · TZS {fmt(drug.sellingPrice * drug.unitsPerPack)}
                           </button>
@@ -480,7 +522,11 @@ export default function SalesPage({ params }: PageProps) {
                             value={item.quantity}
                             onChange={(e) => updateQty(item.drugId, Number(e.target.value))}
                           />
-                          <button className="px-1.5 py-0.5 hover:bg-accent transition-colors" onClick={() => updateQty(item.drugId, item.quantity + 1)}>
+                          <button
+                            className="px-1.5 py-0.5 hover:bg-accent transition-colors disabled:cursor-not-allowed disabled:opacity-40"
+                            disabled={!stockLoading && !!branchId && item.quantity >= Math.max(0, stockByDrug.get(item.drugId)?.quantity ?? 0)}
+                            onClick={() => updateQty(item.drugId, item.quantity + 1)}
+                          >
                             <Plus className="h-3 w-3" />
                           </button>
                         </div>
