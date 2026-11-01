@@ -1167,6 +1167,8 @@ export interface AdminBillingPlan {
   maxUsers: number | null;
   /** Most active branches the plan allows; null means unlimited. */
   maxBranches: number | null;
+  /** Whether the plan includes expense management. */
+  expensesEnabled: boolean;
   active: boolean;
   updatedBy: string | null;
   updatedAt: string | null;
@@ -1182,6 +1184,8 @@ export interface BillingPlanOffer {
   maxUsers: number | null;
   /** Most active branches the plan allows; null means unlimited. */
   maxBranches: number | null;
+  /** Whether the plan includes expense management. */
+  expensesEnabled: boolean;
 }
 
 export interface BillingOverview {
@@ -1349,4 +1353,92 @@ export interface PharmacyLimits {
   overrides: { maxUsers: boolean; maxBranches: boolean };
   effective: { maxUsers: number | null; maxBranches: number | null };
   usage: { users: number; branches: number };
+}
+
+
+// ─── Expenses ─────────────────────────────────────────────────────────────────
+
+export type ExpensePaymentMethod = "Cash" | "MobileMoney" | "Bank" | "Other";
+export type ExpenseStatus = "Recorded" | "Voided";
+
+export interface ExpenseCategory {
+  id: string;
+  name: string;
+  active: boolean;
+}
+
+export interface ExpenseResponse {
+  id: string;
+  branchId: string;
+  branchName: string | null;
+  categoryId: string;
+  categoryName: string | null;
+  /** Decimal string, e.g. "25000.00". */
+  amount: string;
+  /** YYYY-MM-DD */
+  expenseDate: string;
+  description: string | null;
+  paymentMethod: ExpensePaymentMethod;
+  reference: string | null;
+  status: ExpenseStatus;
+  voidReason: string | null;
+  voidedBy: string | null;
+  voidedAt: string | null;
+  recordedBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateExpenseRequest {
+  /** Omit for a seller or branch manager: it defaults to their own branch. */
+  branchId?: string;
+  categoryId: string;
+  amount: number;
+  expenseDate?: string;
+  description?: string;
+  paymentMethod?: ExpensePaymentMethod;
+  reference?: string;
+}
+
+export type UpdateExpenseRequest = Partial<CreateExpenseRequest>;
+
+export interface ExpenseBucket {
+  id: string | null;
+  name: string;
+  total: string;
+  count: number;
+  sharePct: string;
+}
+
+export interface ExpenseSummary {
+  from: string;
+  to: string;
+  total: string;
+  count: number;
+  previousTotal: string;
+  byCategory: ExpenseBucket[];
+  byBranch: ExpenseBucket[];
+  byPaymentMethod: ExpenseBucket[];
+  byDay: { date: string; total: string }[];
+}
+
+export interface ProfitReport {
+  from: string;
+  to: string;
+  revenue: string;
+  costOfGoods: string;
+  grossProfit: string;
+  /** Null when the plan does not include expense management. */
+  expenses: string | null;
+  netProfit: string | null;
+  netMarginPct: string | null;
+  byBranch: {
+    branchId: string;
+    branchName: string;
+    revenue: string;
+    costOfGoods: string;
+    grossProfit: string;
+    expenses: string | null;
+    netProfit: string | null;
+  }[];
 }
