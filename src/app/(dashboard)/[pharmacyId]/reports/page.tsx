@@ -23,6 +23,7 @@ import {
   Legend,
 } from "recharts";
 import { toast } from "sonner";
+import { ProfitStatement } from "@/components/expenses/profit-statement";
 
 interface PageProps {
   params: Promise<{ pharmacyId: string }>;
@@ -59,6 +60,12 @@ export default function ReportsPage({ params }: PageProps) {
   const { data: summary } = useQuery({
     queryKey: ["reports", "summary", pharmacyId, dateParams],
     queryFn: () => reportApi.salesSummary(pharmacyId, dateParams),
+    enabled: !!from && !!to,
+  });
+
+  const { data: profit } = useQuery({
+    queryKey: ["reports", "profit", pharmacyId, dateParams],
+    queryFn: () => reportApi.profit(pharmacyId, dateParams),
     enabled: !!from && !!to,
   });
 
@@ -167,6 +174,8 @@ export default function ReportsPage({ params }: PageProps) {
           </Card>
         ))}
       </div>
+
+      <ProfitStatement report={profit} />
 
       <Tabs defaultValue="sales">
         <TabsList>
