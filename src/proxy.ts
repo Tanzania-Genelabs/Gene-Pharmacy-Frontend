@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 
 /** Public routes that do NOT require authentication */
-const PUBLIC_PATHS = new Set(["/login", "/register", "/forgot-password"]);
+const PUBLIC_PATHS = new Set(["/login", "/register", "/forgot-password", "/privacy"]);
 
 /** Routes only accessible by SuperAdmin */
 const SUPER_ADMIN_PATHS = ["/admin"];
