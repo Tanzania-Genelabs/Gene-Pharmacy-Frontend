@@ -362,7 +362,11 @@ function Checkout({
       qc.invalidateQueries({ queryKey: ["billing", "payments", pharmacyId] });
       onPromptSent(payment);
     },
-    onError: (err) => toast.error(errorMessage(err, "Could not start the payment")),
+    onError: (err) => {
+      toast.error(`${errorMessage(err, "Could not start the payment")}. You can pay by Lipa number or cash instead.`);
+      // Don't leave the owner stuck on a gateway that is not working: move to paying by hand.
+      setMethod("MobileMoney");
+    },
   });
 
   const request = useMutation({
@@ -406,7 +410,12 @@ function Checkout({
     ...(overview.paymentsEnabled
       ? [{ value: "Prompt" as const, title: "Pay now", hint: "Get a mobile-money prompt on your phone", Icon: Zap }]
       : []),
-    { value: "MobileMoney", title: "I paid by mobile money", hint: "M-Pesa, Tigo Pesa, Airtel Money, Halopesa", Icon: Smartphone },
+    {
+      value: "MobileMoney",
+      title: overview.manualPayment ? "Pay by Lipa number" : "I paid by mobile money",
+      hint: overview.manualPayment ? `${overview.manualPayment.network} Lipa number, then tell us` : "M-Pesa, Tigo Pesa, Airtel Money, Halopesa",
+      Icon: Smartphone,
+    },
     { value: "Cash", title: "I paid cash", hint: "Paid in person to Gene Pharmacy", Icon: Banknote },
   ];
 
@@ -550,8 +559,30 @@ function Checkout({
                   onChange={(e) => setPhoneNumber(e.target.value)}
                 />
                 <p className="text-xs text-muted-foreground">The network is detected from the number.</p>
+                <p className="text-xs text-muted-foreground">Prompt not arriving? Choose &quot;Pay by Lipa number&quot; or cash instead.</p>
               </div>
             ) : (
+              <div className="space-y-4">
+                {method === "MobileMoney" && overview.manualPayment && (
+                  <div className="rounded-lg border border-primary/30 bg-primary/5 p-4 text-sm space-y-2 max-w-md">
+                    <p className="font-medium">Pay {money(total)} to this {overview.manualPayment.network} Lipa number</p>
+                    <p className="text-3xl font-bold tracking-wider tabular-nums select-all">{overview.manualPayment.lipaNumber}</p>
+                    <p className="text-muted-foreground">
+                      Name on the number: <strong className="text-foreground">{overview.manualPayment.accountName}</strong>
+                    </p>
+                    <ol className="list-decimal pl-5 text-xs text-muted-foreground space-y-0.5">
+                      <li>Open M-Pesa and choose Lipa kwa M-Pesa, then enter the Lipa number above.</li>
+                      <li>Check that the name shown is {overview.manualPayment.accountName}, enter {money(total)} and confirm with your PIN.</li>
+                      <li>Type the transaction ID from the confirmation message below and press &quot;Send to Gene Pharmacy&quot;.</li>
+                    </ol>
+                  </div>
+                )}
+                {method === "Cash" && (
+                  <div className="rounded-lg border bg-muted/50 p-4 text-sm max-w-md">
+                    Pay <strong>{money(total)}</strong> in cash to Gene Pharmacy and keep the receipt. Enter its number below, then press
+                    &quot;Send to Gene Pharmacy&quot;.
+                  </div>
+                )}
               <div className="space-y-1 max-w-sm">
                 <Label htmlFor="b-ref">{method === "Cash" ? "Receipt number" : "Transaction ID"} (optional)</Label>
                 <Input
@@ -562,6 +593,7 @@ function Checkout({
                   maxLength={100}
                 />
                 <p className="text-xs text-muted-foreground">It helps us find your payment quickly.</p>
+              </div>
               </div>
             )}
           </CardContent>
