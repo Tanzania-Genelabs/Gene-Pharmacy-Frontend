@@ -6,6 +6,7 @@ import type {
   PaymentBreakdownRow,
   InventorySummaryReport,
   PurchaseSummaryReport,
+  ProfitReport,
 } from "@/types";
 
 export const reportApi = {
@@ -14,6 +15,10 @@ export const reportApi = {
 
   salesDaily: (pharmacyId: string, params: { from: string; to: string; branchId?: string }) =>
     api.get<DailySalesRow[]>(`/api/v1/pharmacies/${pharmacyId}/reports/sales/daily`, { params }).then((r) => r.data),
+
+  /** Revenue, cost of goods, expenses and net profit. Expense figures are null if the plan lacks expense management. */
+  profit: (pharmacyId: string, params: { from: string; to: string; branchId?: string }) =>
+    api.get<ProfitReport>(`/api/v1/pharmacies/${pharmacyId}/reports/profit`, { params }).then((r) => r.data),
 
   topDrugs: (pharmacyId: string, params: { from: string; to: string; limit?: number; branchId?: string }) =>
     api.get<TopDrugRow[]>(`/api/v1/pharmacies/${pharmacyId}/reports/sales/top-drugs`, { params }).then((r) => r.data),
