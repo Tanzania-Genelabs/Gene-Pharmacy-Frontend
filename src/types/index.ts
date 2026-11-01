@@ -1196,6 +1196,8 @@ export interface BillingOverview {
   currency: string;
   /** False until ClickPesa credentials and at least one plan price are configured on the server. */
   paymentsEnabled: boolean;
+  /** Where to pay by hand (Lipa number) when the ClickPesa prompt cannot be used; null if none is configured. */
+  manualPayment: { lipaNumber: string; accountName: string; network: string } | null;
 }
 
 /** How a subscription was paid: mobile money in the app, cash recorded by Gene Pharmacy, or a free promotion. */
