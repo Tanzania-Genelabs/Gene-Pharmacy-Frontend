@@ -25,6 +25,7 @@ import {
   TrendingUp,
   CreditCard,
   ScanBarcode,
+  Wallet,
 } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -54,6 +55,7 @@ interface NavItem {
  * | Suppliers        | ✅        | ✅    | ✅      | ❌     |
  * | Purchase Orders  | ✅        | ✅    | ✅      | ❌     |
  * | Reports          | ✅        | ✅    | ✅      | ❌     |
+ * | Expenses         | ✅        | ✅    | ✅      | ✅     |
  * | Notifications    | ✅        | ✅    | ✅      | ✅     |
  * | Users            | ✅        | ✅    | ❌      | ❌     |
  * | Audit Logs       | ✅        | ✅    | ❌      | ❌     |
@@ -78,6 +80,7 @@ function buildNavItems(pharmacyId: string): NavItem[] {
     { label: "Loyalty",          href: `/${pharmacyId}/loyalty`,           icon: Gift,            roles: NO_SELLER },
     { label: "Suppliers",        href: `/${pharmacyId}/suppliers`,         icon: Truck,           roles: NO_SELLER },
     { label: "Purchase Orders",  href: `/${pharmacyId}/purchase-orders`,   icon: FileText,        roles: NO_SELLER },
+    { label: "Expenses",         href: `/${pharmacyId}/expenses`,          icon: Wallet,          roles: ALL },
     { label: "Analytics",        href: `/${pharmacyId}/analytics`,         icon: TrendingUp,      roles: OWNER_AND_ABOVE },
     { label: "Reports",          href: `/${pharmacyId}/reports`,           icon: BarChart3,       roles: NO_SELLER },
     { label: "Notifications",    href: `/${pharmacyId}/notifications`,     icon: Bell,            roles: ALL },
