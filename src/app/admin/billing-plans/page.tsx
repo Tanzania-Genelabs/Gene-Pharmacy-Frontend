@@ -22,6 +22,7 @@ function PlanRow({ plan }: { plan: AdminBillingPlan }) {
   const [weekly, setWeekly] = useState(plan.weeklyPrice ?? "");
   const [maxUsers, setMaxUsers] = useState(plan.maxUsers?.toString() ?? "");
   const [maxBranches, setMaxBranches] = useState(plan.maxBranches?.toString() ?? "");
+  const [expenses, setExpenses] = useState(plan.expensesEnabled);
   const [active, setActive] = useState(plan.active);
 
   const monthlyNumber = Number(monthly);
@@ -38,6 +39,7 @@ function PlanRow({ plan }: { plan: AdminBillingPlan }) {
     weekly !== (plan.weeklyPrice ?? "") ||
     maxUsers !== (plan.maxUsers?.toString() ?? "") ||
     maxBranches !== (plan.maxBranches?.toString() ?? "") ||
+    expenses !== plan.expensesEnabled ||
     active !== plan.active;
 
   // What 4 weeks costs compared with a month: shown so you can see the premium paid for flexibility.
@@ -51,6 +53,7 @@ function PlanRow({ plan }: { plan: AdminBillingPlan }) {
         weeklyPrice: weekly.trim() === "" ? null : weeklyNumber,
         maxUsers: maxUsers.trim() === "" ? null : Number(maxUsers),
         maxBranches: maxBranches.trim() === "" ? null : Number(maxBranches),
+        expensesEnabled: expenses,
         active,
       }),
     onSuccess: (saved) => {
@@ -136,6 +139,18 @@ function PlanRow({ plan }: { plan: AdminBillingPlan }) {
           <input
             type="checkbox"
             className="h-4 w-4 accent-primary"
+            aria-label={`${plan.planType} includes expense management`}
+            checked={expenses}
+            onChange={(e) => setExpenses(e.target.checked)}
+          />
+          {expenses ? <Badge>Included</Badge> : <Badge variant="outline">Not included</Badge>}
+        </label>
+      </TableCell>
+      <TableCell>
+        <label className="inline-flex items-center gap-2 text-sm cursor-pointer">
+          <input
+            type="checkbox"
+            className="h-4 w-4 accent-primary"
             checked={active}
             onChange={(e) => setActive(e.target.checked)}
           />
@@ -188,7 +203,8 @@ export default function AdminBillingPlansPage() {
             waiting for approval keeps the price it was created with. Switching a plan off hides it from pharmacies but does not
             affect those already on it. <strong>Max accounts</strong> counts the owner and every active staff account;{" "}
             <strong>Max branches</strong> counts active branches. Leave a limit empty for unlimited. When a pharmacy reaches its
-            limit it cannot add another until it deactivates one or upgrades; nothing it already has is switched off.
+            limit it cannot add another until it deactivates one or upgrades; nothing it already has is switched off.{" "}
+            <strong>Expenses</strong> decides whether the plan includes expense management (the free trial uses the Premium plan).
           </CardDescription>
         </CardHeader>
         <CardContent className="p-0">
@@ -200,6 +216,7 @@ export default function AdminBillingPlansPage() {
                 <TableHead>Monthly price</TableHead>
                 <TableHead>Max accounts</TableHead>
                 <TableHead>Max branches</TableHead>
+                <TableHead>Expenses</TableHead>
                 <TableHead>Availability</TableHead>
                 <TableHead>Last changed by</TableHead>
                 <TableHead className="w-24" />
@@ -208,7 +225,7 @@ export default function AdminBillingPlansPage() {
             <TableBody>
               {isLoading && (
                 <TableRow>
-                  <TableCell colSpan={8} className="text-center text-muted-foreground py-8">
+                  <TableCell colSpan={9} className="text-center text-muted-foreground py-8">
                     <Loader2 className="h-5 w-5 animate-spin inline mr-2" />
                     Loading…
                   </TableCell>
@@ -216,7 +233,7 @@ export default function AdminBillingPlansPage() {
               )}
               {/* key includes the saved values so a row resets its draft after a successful save */}
               {plans?.map((plan) => (
-                <PlanRow key={`${plan.planType}-${plan.monthlyPrice}-${plan.weeklyPrice}-${plan.maxUsers}-${plan.maxBranches}-${plan.active}`} plan={plan} />
+                <PlanRow key={`${plan.planType}-${plan.monthlyPrice}-${plan.weeklyPrice}-${plan.maxUsers}-${plan.maxBranches}-${plan.expensesEnabled}-${plan.active}`} plan={plan} />
               ))}
             </TableBody>
           </Table>
