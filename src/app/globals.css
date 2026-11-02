@@ -124,3 +124,61 @@
     @apply bg-background text-foreground;
   }
 }
+/* ── Setup guide ─────────────────────────────────────────────────────────── */
+:root {
+  --guide-accent: oklch(0.58 0.2 265);
+}
+
+/* The button the guide wants you to press. */
+[data-guide-glow="true"] {
+  position: relative;
+  z-index: 1;
+  outline: 2px solid var(--guide-accent);
+  outline-offset: 3px;
+  animation: guide-glow 1.6s ease-in-out infinite;
+}
+
+@keyframes guide-glow {
+  0%   { box-shadow: 0 0 0 0 color-mix(in oklab, var(--guide-accent) 55%, transparent); }
+  70%  { box-shadow: 0 0 0 12px color-mix(in oklab, var(--guide-accent) 0%, transparent); }
+  100% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--guide-accent) 0%, transparent); }
+}
+
+.guide-node-pulse { animation: guide-node 1.8s ease-in-out infinite; }
+@keyframes guide-node {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--guide-accent) 45%, transparent); }
+  50%      { box-shadow: 0 0 0 6px color-mix(in oklab, var(--guide-accent) 0%, transparent); }
+}
+
+.guide-float { animation: guide-float 2.4s ease-in-out infinite; }
+@keyframes guide-float {
+  0%, 100% { transform: translateY(0) rotate(-8deg); }
+  50%      { transform: translateY(-6px) rotate(8deg); }
+}
+
+.guide-pop { animation: guide-pop 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) both; }
+@keyframes guide-pop {
+  from { transform: scale(0.3); opacity: 0; }
+  to   { transform: scale(1); opacity: 1; }
+}
+
+.guide-confetti {
+  position: absolute;
+  top: -12px;
+  width: 8px;
+  height: 14px;
+  border-radius: 2px;
+  opacity: 0;
+  animation-name: guide-fall;
+  animation-timing-function: ease-in;
+  animation-iteration-count: 2;
+}
+@keyframes guide-fall {
+  0%   { transform: translateY(0) rotate(0deg); opacity: 1; }
+  100% { transform: translateY(26rem) rotate(540deg); opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-guide-glow="true"], .guide-node-pulse, .guide-float, .guide-pop, .guide-confetti { animation: none; }
+  .guide-confetti { display: none; }
+}
