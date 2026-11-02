@@ -288,11 +288,11 @@ export default function DrugsPage({ params }: PageProps) {
               </span>
             </Button>
           </label>
-          <Button variant="outline" size="sm" onClick={openAdd}>
+          <Button variant="outline" size="sm" data-guide="add-drug" onClick={openAdd}>
             <Plus className="h-4 w-4 mr-2" />
             Add Drug
           </Button>
-          <Button size="sm" onClick={() => setShowCatalog(true)}>
+          <Button size="sm" data-guide="add-from-catalog" onClick={() => setShowCatalog(true)}>
             <Library className="h-4 w-4 mr-2" />
             Add from catalog
           </Button>
