@@ -8,7 +8,8 @@ import { toast } from "sonner";
 import { ThemeToggle } from "./theme-toggle";
 import { ProfileDialog } from "./profile-dialog";
 import { NotificationBell } from "./notification-bell";
-import { LogOut, User, ChevronDown } from "lucide-react";
+import { LogOut, User, ChevronDown, Rocket } from "lucide-react";
+import { useGuideStore } from "@/store/guide.store";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
@@ -92,6 +93,12 @@ export function Header({ pharmacyId, title }: HeaderProps) {
                 <User className="mr-2 h-4 w-4" />
                 Profile
               </DropdownMenuItem>
+              {user.onboardingCompleted !== false && (
+                <DropdownMenuItem onClick={() => useGuideStore.getState().startReplay()}>
+                  <Rocket className="mr-2 h-4 w-4" />
+                  Setup guide
+                </DropdownMenuItem>
+              )}
               <DropdownMenuSeparator />
               <DropdownMenuItem
                 className="text-destructive focus:text-destructive"
