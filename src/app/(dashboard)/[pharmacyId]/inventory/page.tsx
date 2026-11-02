@@ -162,7 +162,7 @@ export default function InventoryPage({ params }: PageProps) {
             <ArrowRightLeft className="h-4 w-4 mr-2" />
             Transfer Stock
           </Button>
-          <Button size="sm" onClick={() => setShowAdjust(true)}>
+          <Button size="sm" data-guide="adjust-stock" onClick={() => setShowAdjust(true)}>
             <Package className="h-4 w-4 mr-2" />
             Adjust Stock
           </Button>
