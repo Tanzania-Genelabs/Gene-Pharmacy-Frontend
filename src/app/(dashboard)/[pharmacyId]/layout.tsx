@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { Sidebar } from "@/components/layout/sidebar";
 import { Header } from "@/components/layout/header";
+import { SetupGuide } from "@/components/guide/setup-guide";
 import { useAuthStore } from "@/store/auth.store";
 import { pharmacyApi } from "@/api/pharmacy.api";
 import { SUBSCRIPTION_REQUIRED_EVENT } from "@/lib/api";
@@ -121,6 +122,7 @@ export default function DashboardLayout({ children, params }: DashboardLayoutPro
           {children}
         </main>
       </div>
+      <SetupGuide pharmacyId={pharmacyId} />
     </div>
   );
 }
