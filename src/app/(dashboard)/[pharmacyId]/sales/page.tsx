@@ -333,7 +333,7 @@ export default function SalesPage({ params }: PageProps) {
             <div className="flex flex-col sm:flex-row gap-2">
               {isSeller ? (
                 // Seller is locked to their assigned branch — no selector shown
-                <div className="h-9 flex items-center gap-2 rounded-md border border-input bg-muted px-3 text-sm sm:w-52 flex-shrink-0">
+                <div data-guide="sales-branch" className="h-9 flex items-center gap-2 rounded-md border border-input bg-muted px-3 text-sm sm:w-52 flex-shrink-0">
                   <span className="text-muted-foreground text-xs">Branch:</span>
                   <span className="font-medium truncate">
                     {branches?.find((b) => b.id === branchId)?.name ?? "Your Branch"}
@@ -341,6 +341,7 @@ export default function SalesPage({ params }: PageProps) {
                 </div>
               ) : (
                 <select
+                  data-guide="sales-branch"
                   className="h-9 rounded-md border border-input bg-background px-3 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring sm:w-52 flex-shrink-0"
                   value={branchId}
                   onChange={(e) => { setBranchId(e.target.value); setCart([]); }}
