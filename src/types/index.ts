@@ -85,6 +85,11 @@ export interface UserSummary {
   firstName: string | null;
   lastName: string | null;
   fullName: string;
+  /**
+   * Decided by the server. False means this person is new and must finish the guided setup before using
+   * the rest of the app. Missing (an older session) counts as done.
+   */
+  onboardingCompleted?: boolean;
 }
 
 // ─── User ─────────────────────────────────────────────────────────────────────
