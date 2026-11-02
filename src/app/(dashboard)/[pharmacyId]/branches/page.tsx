@@ -134,7 +134,7 @@ export default function BranchesPage({ params }: PageProps) {
           <h2 className="text-2xl font-bold tracking-tight text-foreground">Branches</h2>
           <p className="text-muted-foreground text-sm mt-1">{data?.length ?? 0} branches</p>
         </div>
-        <Button size="sm" onClick={() => setShowAdd(true)}>
+        <Button size="sm" data-guide="add-branch" onClick={() => setShowAdd(true)}>
           <Plus className="h-4 w-4 mr-2" />
           Add Branch
         </Button>
