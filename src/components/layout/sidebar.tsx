@@ -26,12 +26,14 @@ import {
   CreditCard,
   ScanBarcode,
   Wallet,
+  Rocket,
 } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useAuthStore } from "@/store/auth.store";
+import { useGuideStore } from "@/store/guide.store";
 
 interface NavItem {
   label: string;
@@ -100,6 +102,9 @@ export function Sidebar({ pharmacyId, pharmacyName = "Gene Pharmacy" }: SidebarP
   const [collapsed, setCollapsed] = useState(false);
   const { user } = useAuthStore();
   const userRole = user?.role ?? "";
+  // While a new person is being guided only the current step's page works; the rest is greyed out.
+  const lock = useGuideStore((s) => s.lock);
+  const guided = user?.onboardingCompleted === false;
 
   const navItems = buildNavItems(pharmacyId).filter(
     (item) => !item.roles || item.roles.includes(userRole)
@@ -146,6 +151,20 @@ export function Sidebar({ pharmacyId, pharmacyName = "Gene Pharmacy" }: SidebarP
                 </Link>
               );
 
+              if (lock && item.href !== lock) {
+                return (
+                  <div
+                    key={item.href}
+                    aria-disabled
+                    title="Finish the setup guide to unlock this"
+                    className={cn("flex cursor-not-allowed items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground opacity-40", collapsed && "justify-center px-2")}
+                  >
+                    <item.icon className="h-4 w-4 flex-shrink-0" />
+                    {!collapsed && <span>{item.label}</span>}
+                  </div>
+                );
+              }
+
               if (collapsed) {
                 return (
                   <Tooltip key={item.href}>
@@ -161,7 +180,19 @@ export function Sidebar({ pharmacyId, pharmacyName = "Gene Pharmacy" }: SidebarP
         </ScrollArea>
 
         {/* Collapse toggle */}
-        <div className="border-t border-border p-2">
+        <div className="border-t border-border p-2 space-y-1">
+          {!guided && (
+          <Button
+            variant="ghost"
+            className={cn("w-full h-8 text-muted-foreground", collapsed ? "px-0" : "justify-start px-3")}
+            onClick={() => useGuideStore.getState().startReplay()}
+            aria-label="Open the setup guide"
+            title="Setup guide: see how to set up and start selling"
+          >
+            <Rocket className="h-4 w-4" />
+            {!collapsed && <span>Setup guide</span>}
+          </Button>
+          )}
           <Button
             variant="ghost"
             size="icon"
