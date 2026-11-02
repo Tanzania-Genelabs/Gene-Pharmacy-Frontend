@@ -11,6 +11,10 @@ export const authApi = {
 
   logout: () => sessionClient.logout(),
 
+  /** Tells the server this person finished the guided setup, so they are not guided again. */
+  completeOnboarding: () =>
+    api.post<{ onboardingCompleted: boolean }>("/api/v1/auth/onboarding/complete").then((r) => r.data),
+
   /** SuperAdmin only. Staff accounts are created through the pharmacy users API. */
   register: (data: RegisterRequest) =>
     api.post<AuthResponse>("/api/v1/auth/register", data).then((r) => r.data),
