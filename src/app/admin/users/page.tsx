@@ -11,6 +11,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
+import { ReasonDialog } from "@/components/admin/reason-dialog";
+import { apiErrorMessage } from "@/lib/errors";
 import {
   Users, Search, Loader2, UserCheck, UserX, ShieldCheck,
   Crown, Briefcase, Store, Plus, Pencil, Trash2, KeyRound, X,
@@ -117,10 +119,11 @@ function EditUserModal({ user, onClose }: { user: UserResponse; onClose: () => v
     pharmacyId: user.pharmacyId ?? undefined, enabled: user.enabled,
   });
 
+  const [reason, setReason] = useState("");
   const mutation = useMutation({
-    mutationFn: () => adminUserApi.update(user.id, form),
+    mutationFn: () => adminUserApi.update(user.id, form, reason.trim()),
     onSuccess: (u) => { toast.success(`${u.email} updated`); queryClient.invalidateQueries({ queryKey: ["admin", "users"] }); onClose(); },
-    onError: () => toast.error("Failed to update user"),
+    onError: (e) => toast.error(apiErrorMessage(e, "Failed to update user")),
   });
 
   return (
@@ -155,8 +158,12 @@ function EditUserModal({ user, onClose }: { user: UserResponse; onClose: () => v
           <input type="checkbox" id="edit-enabled" checked={form.enabled ?? user.enabled} onChange={(e) => setForm((p) => ({ ...p, enabled: e.target.checked }))} className="h-4 w-4" />
           <Label htmlFor="edit-enabled">Account enabled</Label>
         </div>
+        <div className="space-y-1.5">
+          <Label>Reason for the change</Label>
+          <Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Saved in the audit log (min 5 characters)" maxLength={500} />
+        </div>
         <div className="flex gap-2 pt-2">
-          <Button className="flex-1" onClick={() => mutation.mutate()} disabled={mutation.isPending}>
+          <Button className="flex-1" onClick={() => mutation.mutate()} disabled={mutation.isPending || reason.trim().length < 5}>
             {mutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Save Changes
           </Button>
           <Button variant="outline" onClick={onClose}>Cancel</Button>
@@ -169,10 +176,11 @@ function EditUserModal({ user, onClose }: { user: UserResponse; onClose: () => v
 // ─── Reset password ───────────────────────────────────────────────────────────
 function ResetPasswordModal({ user, onClose }: { user: UserResponse; onClose: () => void }) {
   const [password, setPassword] = useState("");
+  const [reason, setReason] = useState("");
   const mutation = useMutation({
-    mutationFn: () => adminUserApi.resetPassword(user.id, password),
+    mutationFn: () => adminUserApi.resetPassword(user.id, password, reason.trim()),
     onSuccess: () => { toast.success(`Password reset for ${user.email}`); onClose(); },
-    onError: () => toast.error("Failed to reset password"),
+    onError: (e) => toast.error(apiErrorMessage(e, "Failed to reset password")),
   });
   return (
     <Modal title={`Reset password: ${user.email}`} onClose={onClose}>
@@ -182,8 +190,12 @@ function ResetPasswordModal({ user, onClose }: { user: UserResponse; onClose: ()
           <Label>New Password</Label>
           <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Min 8 characters" />
         </div>
+        <div className="space-y-1.5">
+          <Label>Reason</Label>
+          <Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Saved in the audit log (min 5 characters)" maxLength={500} />
+        </div>
         <div className="flex gap-2">
-          <Button className="flex-1" onClick={() => mutation.mutate()} disabled={mutation.isPending || password.length < 8}>
+          <Button className="flex-1" onClick={() => mutation.mutate()} disabled={mutation.isPending || password.length < 8 || reason.trim().length < 5}>
             {mutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Reset Password
           </Button>
           <Button variant="outline" onClick={onClose}>Cancel</Button>
@@ -196,8 +208,9 @@ function ResetPasswordModal({ user, onClose }: { user: UserResponse; onClose: ()
 // ─── Delete confirm ───────────────────────────────────────────────────────────
 function DeleteUserModal({ user, onClose }: { user: UserResponse; onClose: () => void }) {
   const queryClient = useQueryClient();
+  const [reason, setReason] = useState("");
   const mutation = useMutation({
-    mutationFn: () => adminUserApi.deleteUser(user.id),
+    mutationFn: () => adminUserApi.deleteUser(user.id, reason.trim()),
     onSuccess: () => { toast.success(`${user.email} deleted`); queryClient.invalidateQueries({ queryKey: ["admin", "users"] }); onClose(); },
     onError: (err: unknown) => {
       const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? "Failed to delete user";
@@ -213,8 +226,12 @@ function DeleteUserModal({ user, onClose }: { user: UserResponse; onClose: () =>
         <div className="rounded-lg bg-destructive/10 border border-destructive/20 p-3 text-sm text-destructive">
           <strong>Warning:</strong> All user data removed. Associated pharmacy records are preserved.
         </div>
+        <div className="space-y-1.5">
+          <Label>Reason</Label>
+          <Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Saved in the audit log (min 5 characters)" maxLength={500} />
+        </div>
         <div className="flex gap-2">
-          <Button variant="destructive" className="flex-1" onClick={() => mutation.mutate()} disabled={mutation.isPending}>
+          <Button variant="destructive" className="flex-1" onClick={() => mutation.mutate()} disabled={mutation.isPending || reason.trim().length < 5}>
             {mutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Delete Permanently
           </Button>
           <Button variant="outline" onClick={onClose}>Cancel</Button>
@@ -255,10 +272,11 @@ export default function AdminUsersPage() {
     queryFn: () => adminUserApi.stats(),
   });
 
+  const [disableFor, setDisableFor] = useState<UserResponse | null>(null);
   const toggleMutation = useMutation({
-    mutationFn: adminUserApi.toggleEnabled,
-    onSuccess: (user) => { toast.success(`${user.email} ${user.enabled ? "enabled" : "disabled"}`); queryClient.invalidateQueries({ queryKey: ["admin", "users"] }); },
-    onError: () => toast.error("Failed to update user status"),
+    mutationFn: ({ userId, reason }: { userId: string; reason?: string }) => adminUserApi.toggleEnabled(userId, reason),
+    onSuccess: (user) => { toast.success(`${user.email} ${user.enabled ? "enabled" : "disabled"}`); setDisableFor(null); queryClient.invalidateQueries({ queryKey: ["admin", "users"] }); },
+    onError: (e) => toast.error(apiErrorMessage(e, "Failed to update user status")),
   });
 
   const users: UserResponse[] = data?.content ?? [];
@@ -367,7 +385,7 @@ export default function AdminUsersPage() {
                         <td className="py-3">
                           <div className="flex items-center justify-end gap-1">
                             {u.role !== "SuperAdmin" && (
-                              <Button variant="ghost" size="sm" onClick={() => toggleMutation.mutate(u.id)} disabled={toggleMutation.isPending}
+                              <Button variant="ghost" size="sm" onClick={() => (u.enabled ? setDisableFor(u) : toggleMutation.mutate({ userId: u.id }))} disabled={toggleMutation.isPending}
                                 title={u.enabled ? "Disable" : "Enable"}>
                                 {u.enabled ? <UserX className="h-4 w-4 text-orange-500" /> : <UserCheck className="h-4 w-4 text-green-500" />}
                               </Button>
@@ -409,6 +427,17 @@ export default function AdminUsersPage() {
       {modal?.type === "edit" && <EditUserModal user={modal.user} onClose={() => setModal(null)} />}
       {modal?.type === "reset" && <ResetPasswordModal user={modal.user} onClose={() => setModal(null)} />}
       {modal?.type === "delete" && <DeleteUserModal user={modal.user} onClose={() => setModal(null)} />}
+
+      <ReasonDialog
+        open={!!disableFor}
+        title={`Disable ${disableFor?.email ?? "this account"}`}
+        description="They are signed out and cannot sign in until you enable the account again."
+        confirmLabel="Disable account"
+        destructive
+        pending={toggleMutation.isPending}
+        onConfirm={(reason) => disableFor && toggleMutation.mutate({ userId: disableFor.id, reason })}
+        onClose={() => setDisableFor(null)}
+      />
     </div>
   );
 }
