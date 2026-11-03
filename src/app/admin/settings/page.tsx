@@ -3,6 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { adminSystemApi } from "@/api/admin.api";
 import { timeAgo } from "@/lib/audit";
+import { TwoFactorCard } from "@/components/admin/two-factor-card";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -67,6 +68,8 @@ export default function AdminSettingsPage() {
           </CardContent>
         </Card>
       )}
+
+      <TwoFactorCard />
 
       {data && <Status data={data} />}
     </div>
@@ -165,7 +168,25 @@ function Status({ data }: { data: SystemStatus }) {
                   ? `Latest ${timeAgo(backups.latestAt)} (${backups.latestSizeKb} KB) · ${backups.count} kept · ${backups.offServerCopy ? "copied off-server" : "this server only"}`
                   : "None found"
               }
-              health={backups.latestAt && backups.offServerCopy ? "ok" : "warn"}
+              health={backups.latestAt && backups.offServerCopy && backups.lastRun?.status !== "failed" ? "ok" : "warn"}
+            />
+            <Row
+              label="Last backup run"
+              value={
+                backups.lastRun
+                  ? `${backups.lastRun.status === "success" ? "Succeeded" : backups.lastRun.status === "partial" ? "Made, but not copied off-server" : "FAILED"} ${timeAgo(backups.lastRun.at)}${backups.lastRun.message ? ` · ${backups.lastRun.message}` : ""}`
+                  : "No run recorded yet"
+              }
+              health={backups.lastRun ? (backups.lastRun.status === "success" ? "ok" : backups.lastRun.status === "partial" ? "warn" : "bad") : "warn"}
+            />
+            <Row
+              label="Restore test"
+              value={
+                backups.lastRestoreTest
+                  ? `${backups.lastRestoreTest.status === "success" ? "Passed" : "FAILED"} ${timeAgo(backups.lastRestoreTest.at)} (${backups.lastRestoreTest.method === "full" ? "restored into a scratch database" : "file checked only"})${backups.lastRestoreTest.message ? ` · ${backups.lastRestoreTest.message}` : ""}`
+                  : "Never tested. Run: php artisan db:backup-verify"
+              }
+              health={backups.lastRestoreTest ? (backups.lastRestoreTest.status === "success" ? (backups.lastRestoreTest.method === "full" ? "ok" : "warn") : "bad") : "warn"}
             />
             <Row
               label={`Payments (${payments.gateway})`}
