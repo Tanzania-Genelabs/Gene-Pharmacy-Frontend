@@ -7,6 +7,7 @@ import type {
   AuditFacets,
   AuditLogResponse,
   SystemStatus,
+  AdminOverview,
   AdminBillingPlan,
   CatalogFacets,
   CatalogImportResult,
@@ -23,6 +24,9 @@ import type {
   Role,
   AdminCreateUserRequest,
   AdminUpdateUserRequest,
+  SupportSession,
+  BulkResult,
+  BusinessReport,
 } from "@/types";
 
 // ─── Admin Users API ──────────────────────────────────────────────────────────
@@ -46,21 +50,23 @@ export const adminUserApi = {
   create: (data: AdminCreateUserRequest) =>
     api.post<UserResponse>("/api/v1/admin/users", data).then((r) => r.data),
 
-  update: (userId: string, data: AdminUpdateUserRequest) =>
-    api.put<UserResponse>(`/api/v1/admin/users/${userId}`, data).then((r) => r.data),
+  /** Changing an account needs a reason (kept in the audit log with the old and new values). */
+  update: (userId: string, data: AdminUpdateUserRequest, reason: string) =>
+    api.put<UserResponse>(`/api/v1/admin/users/${userId}`, { ...data, reason }).then((r) => r.data),
 
-  toggleEnabled: (userId: string) =>
+  /** Disabling needs a reason; enabling does not. */
+  toggleEnabled: (userId: string, reason?: string) =>
     api
-      .post<UserResponse>(`/api/v1/admin/users/${userId}/toggle-enabled`)
+      .post<UserResponse>(`/api/v1/admin/users/${userId}/toggle-enabled`, { reason })
       .then((r) => r.data),
 
-  resetPassword: (userId: string, newPassword: string) =>
+  resetPassword: (userId: string, newPassword: string, reason: string) =>
     api
-      .post(`/api/v1/admin/users/${userId}/reset-password`, { newPassword })
+      .post(`/api/v1/admin/users/${userId}/reset-password`, { newPassword, reason })
       .then((r) => r.data),
 
-  deleteUser: (userId: string) =>
-    api.delete(`/api/v1/admin/users/${userId}`).then((r) => r.data),
+  deleteUser: (userId: string, reason: string) =>
+    api.delete(`/api/v1/admin/users/${userId}`, { data: { reason } }).then((r) => r.data),
 
   stats: () =>
     api.get<AdminUserStats>("/api/v1/admin/users/stats").then((r) => r.data),
@@ -131,7 +137,7 @@ export const adminBillingPlanApi = {
   /** Changes a plan's prices (whole TZS), its account / branch limits (null = unlimited) and/or whether it can be bought. */
   update: (
     planType: BillingPlan,
-    data: { monthlyPrice?: number; weeklyPrice?: number | null; maxUsers?: number | null; maxBranches?: number | null; expensesEnabled?: boolean; active?: boolean },
+    data: { monthlyPrice?: number; weeklyPrice?: number | null; maxUsers?: number | null; maxBranches?: number | null; expensesEnabled?: boolean; active?: boolean; reason: string },
   ) =>
     api
       .put<AdminBillingPlan>(`/api/v1/admin/billing-plans/${planType}`, data)
@@ -139,6 +145,11 @@ export const adminBillingPlanApi = {
 };
 
 // ─── Admin System Status API ──────────────────────────────────────────────────
+
+export const adminOverviewApi = {
+  /** Sales across every pharmacy, sign-ups per month, top pharmacies and the ones that need attention. */
+  get: () => api.get<AdminOverview>("/api/v1/admin/overview").then((r) => r.data),
+};
 
 export const adminSystemApi = {
   /** Live measurements of the running platform (database, scheduler, backups, payments, ...). */
@@ -164,7 +175,7 @@ export const adminPaymentApi = {
     api.get<AdminPaymentSummary>("/api/v1/admin/payments/summary", { params }).then((r) => r.data),
 
   /** Confirms a plan request: the money arrived, so the pharmacy gets its period. The amount defaults to the list price. */
-  approve: (paymentId: string, data?: { amount?: number; reference?: string }) =>
+  approve: (paymentId: string, data?: { amount?: number; reference?: string; reason?: string }) =>
     api
       .post<{ payment: AdminPaymentResponse; subscription: AdminSubscriptionRow }>(`/api/v1/admin/payments/${paymentId}/approve`, data ?? {})
       .then((r) => r.data),
@@ -178,6 +189,51 @@ export const adminPaymentApi = {
     api
       .post<{ payment: AdminPaymentResponse; subscription: AdminSubscriptionRow | null }>(`/api/v1/admin/payments/${paymentId}/void`, { reason })
       .then((r) => r.data),
+
+  /** Confirms several waiting requests at their list price. Each one is checked and audited on its own. */
+  bulkApprove: (ids: string[], reason?: string) =>
+    api.post<BulkResult>("/api/v1/admin/payments/bulk-approve", { ids, reason }).then((r) => r.data),
+
+  /** Downloads the (filtered) payment list as a CSV file. */
+  exportCsv: async (params?: { method?: string; status?: string; from?: string; to?: string; search?: string }) => {
+    const res = await api.get<Blob>("/api/v1/admin/payments/export", { params, responseType: "blob" });
+    const url = URL.createObjectURL(res.data);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `payments-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  },
+};
+
+// ─── Admin: bulk actions on pharmacies ────────────────────────────────────────
+
+export const adminBulkApi = {
+  pharmacies: (action: "approve" | "reject" | "suspend" | "reactivate", ids: string[], reason?: string) =>
+    api.post<BulkResult>("/api/v1/admin/pharmacies/bulk", { action, ids, reason }).then((r) => r.data),
+};
+
+// ─── Admin: support sessions (time-boxed, reasoned access to a pharmacy) ──────
+
+export const adminSupportApi = {
+  start: (pharmacyId: string, reason: string, minutes: number) =>
+    api.post<SupportSession>("/api/v1/admin/support-sessions", { pharmacyId, reason, minutes }).then((r) => r.data),
+
+  /** The running session for this pharmacy, or null. */
+  active: (pharmacyId: string) =>
+    api.get<SupportSession | null>("/api/v1/admin/support-sessions/active", { params: { pharmacyId } }).then((r) => r.data),
+
+  end: (sessionId: string) => api.post<SupportSession>(`/api/v1/admin/support-sessions/${sessionId}/end`).then((r) => r.data),
+
+  list: (params?: { pharmacyId?: string; page?: number; size?: number }) =>
+    api.get<Page<SupportSession>>("/api/v1/admin/support-sessions", { params }).then((r) => r.data),
+};
+
+// ─── Admin: business report ───────────────────────────────────────────────────
+
+export const adminReportApi = {
+  business: (params?: { from?: string; to?: string }) =>
+    api.get<BusinessReport>("/api/v1/admin/reports/business", { params }).then((r) => r.data),
 };
 
 // ─── Admin: shared product catalog ────────────────────────────────────────────
