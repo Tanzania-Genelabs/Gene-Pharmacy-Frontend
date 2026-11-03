@@ -1,5 +1,5 @@
 import axios from "axios";
-import type { AuthResponse, LoginRequest } from "@/types";
+import type { AuthResponse, LoginRequest, TwoFactorChallenge } from "@/types";
 import { tokenStore } from "@/lib/tokens";
 
 /**
@@ -11,7 +11,11 @@ const sessionHttp = axios.create({ baseURL: "", timeout: 20_000, headers: { "Con
 let inflightRefresh: Promise<AuthResponse> | null = null;
 
 export const sessionClient = {
-  login: (data: LoginRequest) => sessionHttp.post<AuthResponse>("/api/session/login", data).then((r) => r.data),
+  /** A normal account gets its session; a two-factor account gets a challenge to finish with a code. */
+  login: (data: LoginRequest) => sessionHttp.post<AuthResponse | TwoFactorChallenge>("/api/session/login", data).then((r) => r.data),
+
+  verifyTwoFactor: (challengeToken: string, code: string) =>
+    sessionHttp.post<AuthResponse>("/api/session/2fa", { challengeToken, code }).then((r) => r.data),
 
   /** One refresh at a time per tab: concurrent callers (React double-mount, parallel 401s) share it. */
   refresh: (): Promise<AuthResponse> => {
