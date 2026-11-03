@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { adminAuditLogApi } from "@/api/admin.api";
 import { pharmacyApi } from "@/api/pharmacy.api";
+import { AuditDetail } from "@/components/audit/audit-detail";
 import { actionLabel, actionVariant } from "@/lib/audit";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -215,7 +216,7 @@ export default function AdminAuditLogsPage() {
                           {actionLabel(log.action)}
                         </Badge>
                       </td>
-                      <td className="py-3 pr-3 max-w-md text-muted-foreground">{log.description}</td>
+                      <td className="py-3 pr-3 max-w-md text-muted-foreground"><AuditDetail log={log} /></td>
                       <td className="py-3 text-xs tabular-nums text-muted-foreground whitespace-nowrap">
                         {log.ipAddress ?? "—"}
                       </td>
