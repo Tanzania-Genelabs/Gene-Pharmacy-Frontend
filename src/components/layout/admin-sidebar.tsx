@@ -13,6 +13,8 @@ import {
   Library,
   Settings,
   Shield,
+  LineChart,
+  LifeBuoy,
   ChevronLeft,
   ChevronRight,
   Pill,
@@ -36,6 +38,8 @@ const NAV_ITEMS: NavItem[] = [
   { label: "Drug Catalog", href: "/admin/catalog", icon: Library },
   { label: "Payments", href: "/admin/payments", icon: Wallet },
   { label: "Plans & Pricing", href: "/admin/billing-plans", icon: Banknote },
+  { label: "Business Reports", href: "/admin/reports", icon: LineChart },
+  { label: "Support Sessions", href: "/admin/support", icon: LifeBuoy },
   { label: "Audit Logs", href: "/admin/audit-logs", icon: Shield },
   { label: "Settings", href: "/admin/settings", icon: Settings },
 ];
