@@ -77,9 +77,10 @@ function LimitsForm({ pharmacyId, limits, onDone }: { pharmacyId: string; limits
   const dirty =
     JSON.stringify([users, branches]) !== JSON.stringify([initial("maxUsers"), initial("maxBranches")]);
 
+  const [reason, setReason] = useState("");
   const save = useMutation({
     mutationFn: () => {
-      const body: { maxUsers?: number | null; maxBranches?: number | null; useDefault: Key[] } = { useDefault: [] };
+      const body: { maxUsers?: number | null; maxBranches?: number | null; useDefault: Key[]; reason: string } = { useDefault: [], reason: reason.trim() };
       for (const [key, v] of [["maxUsers", users], ["maxBranches", branches]] as const) {
         if (v.mode === "plan") body.useDefault.push(key);
         else body[key] = v.mode === "unlimited" ? null : Number(v.value);
@@ -138,12 +139,16 @@ function LimitsForm({ pharmacyId, limits, onDone }: { pharmacyId: string; limits
         )}
         {row("maxUsers", "Accounts (owner included)", limits.usage.users, users, setUsers)}
         {row("maxBranches", "Active branches", limits.usage.branches, branches, setBranches)}
+        <div className="space-y-1.5">
+          <Label>Reason for the change</Label>
+          <Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Why this pharmacy gets different limits (min 5 characters)" maxLength={500} />
+        </div>
       </div>
       <DialogFooter>
         <Button variant="outline" onClick={onDone}>
           Cancel
         </Button>
-        <Button disabled={!dirty || !valid(users) || !valid(branches) || save.isPending} onClick={() => save.mutate()}>
+        <Button disabled={!dirty || !valid(users) || !valid(branches) || reason.trim().length < 5 || save.isPending} onClick={() => save.mutate()}>
           {save.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save limits"}
         </Button>
       </DialogFooter>
