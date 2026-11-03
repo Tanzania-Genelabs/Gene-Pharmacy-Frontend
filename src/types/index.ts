@@ -834,6 +834,11 @@ export interface AuditLogResponse {
   entityId: string | null;
   description: string;
   ipAddress: string | null;
+  /** Why a platform admin did it (typed by them), when the action needs one. */
+  reason?: string | null;
+  /** What it looked like before / after, for sensitive changes. */
+  before?: Record<string, unknown> | null;
+  after?: Record<string, unknown> | null;
   createdAt: string;
 }
 
@@ -851,6 +856,104 @@ export interface AuditFacets {
 export type SystemWarningLevel = "critical" | "warning" | "info";
 
 /** Live measurements from GET /admin/system. Nothing in it is a fixed claim. */
+/** Platform-wide numbers for the admin dashboard. Money arrives as decimal strings. */
+export interface AdminOverview {
+  sales: { todayCount: number; todayRevenue: string; last30Count: number; last30Revenue: string; allTimeCount: number; allTimeRevenue: string };
+  inventory: { drugs: number; branches: number };
+  topPharmacies: { pharmacyId: string; name: string; sales: number; revenue: string }[];
+  signups: { month: string; label: string; count: number }[];
+  attention: { pharmacyId: string; name: string; city: string | null; reason: string }[];
+  actions: AdminActions;
+}
+
+export interface AdminActionPharmacy {
+  pharmacyId: string;
+  name: string;
+  city: string | null;
+  since: string | null;
+  detail?: string;
+  plan?: string;
+}
+
+/** Everything waiting for a decision, each with the first few items and a count. */
+export interface AdminActions {
+  pendingPharmacies: { count: number; items: AdminActionPharmacy[] };
+  paymentRequests: {
+    count: number;
+    items: { paymentId: string; pharmacyId: string; name: string; amount: string; planType: string | null; since: string | null }[];
+  };
+  expiringSubscriptions: { count: number; items: AdminActionPharmacy[] };
+  endedSubscriptions: { count: number; items: AdminActionPharmacy[] };
+  suspendedPharmacies: { count: number; items: AdminActionPharmacy[] };
+  systemProblems: { count: number; items: { level: string; message: string }[] };
+  security: {
+    twoFactorEnabled: boolean | null;
+    recentEvents: { id: string; action: string; actorEmail: string | null; description: string; ipAddress: string | null; createdAt: string | null }[];
+  };
+}
+
+export interface TwoFactorStatus {
+  enabled: boolean;
+  recoveryCodesLeft: number;
+}
+
+export interface TwoFactorChallenge {
+  twoFactorRequired: true;
+  challengeToken: string;
+  email: string;
+}
+
+export interface SupportSession {
+  id: string;
+  pharmacyId: string;
+  pharmacyName: string | null;
+  adminEmail: string;
+  reason: string;
+  startedAt: string;
+  expiresAt: string;
+  endedAt: string | null;
+  active: boolean;
+  writeCount: number;
+}
+
+export interface BulkResult {
+  action: string;
+  done: number;
+  skipped: number;
+  results: { id: string; name: string | null; ok: boolean; message: string }[];
+}
+
+export interface BusinessReport {
+  range: { from: string; to: string };
+  revenue: {
+    total: string;
+    payments: number;
+    allTime: string;
+    byMonth: { month: string; label: string; amount: string; payments: number }[];
+    byMethod: { method: string; payments: number; amount: string }[];
+  };
+  customers: { payingNow: number; onTrialNow: number; estimatedMonthlyRecurring: string; averagePerPayingPharmacy: string };
+  growth: { newPharmacies: number; newApproved: number; totalPharmacies: number; activePharmacies: number };
+  churn: {
+    lostPharmacies: number;
+    lostPaying: number;
+    closedOrSuspended: number;
+    items: { pharmacyId: string; name: string; endedOn: string; plan: string; wasPaying: boolean }[];
+  };
+  trials: { started: number; converted: number; conversionPercent: number | null; convertedNames: string[] };
+  topPayers: { pharmacyId: string; name: string; amount: string; payments: number }[];
+}
+
+export interface BackupRunInfo {
+  status: "success" | "failed" | "partial" | string;
+  at: string;
+  /** For a restore test: full = loaded into a scratch database, structural = the file was read and checked. */
+  method: string | null;
+  message: string | null;
+  offServer: boolean;
+  sizeKb: number | null;
+}
+
 export interface SystemStatus {
   checkedAt: string;
   application: {
@@ -865,7 +968,14 @@ export interface SystemStatus {
   migrations: { applied: number | null; pending: number | null; latest: string | null };
   cache: { store: string; working: boolean };
   scheduler: { lastRunAt: string | null; running: boolean };
-  backups: { latestAt: string | null; latestSizeKb: number | null; count: number; offServerCopy: boolean };
+  backups: {
+    latestAt: string | null;
+    latestSizeKb: number | null;
+    count: number;
+    offServerCopy: boolean;
+    lastRun: BackupRunInfo | null;
+    lastRestoreTest: BackupRunInfo | null;
+  };
   payments: {
     gateway: string;
     configured: boolean;
