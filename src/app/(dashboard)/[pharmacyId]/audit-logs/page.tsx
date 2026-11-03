@@ -3,6 +3,7 @@
 import { use, useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { auditLogApi } from "@/api/audit-log.api";
+import { AuditDetail } from "@/components/audit/audit-detail";
 import { actionLabel, actionVariant } from "@/lib/audit";
 import { Search, Shield } from "lucide-react";
 import { Input } from "@/components/ui/input";
@@ -168,7 +169,7 @@ export default function AuditLogsPage({ params }: PageProps) {
                         {actionLabel(log.action)}
                       </Badge>
                     </TableCell>
-                    <TableCell className="text-muted-foreground max-w-md whitespace-normal">{log.description}</TableCell>
+                    <TableCell className="text-muted-foreground max-w-md whitespace-normal"><AuditDetail log={log} /></TableCell>
                     <TableCell className="tabular-nums text-muted-foreground text-xs whitespace-nowrap">
                       {log.ipAddress ?? "—"}
                     </TableCell>
