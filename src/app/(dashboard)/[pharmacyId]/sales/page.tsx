@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useState, useMemo, useRef, useCallback } from "react";
+import { use, useState, useMemo, useRef, useCallback, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { salesApi } from "@/api/sales.api";
 import { drugApi, drugCategoryApi } from "@/api/drug.api";
@@ -124,7 +124,19 @@ export default function SalesPage({ params }: PageProps) {
   const isSeller = user?.role === "Seller";
 
   const [tab, setTab] = useState<"pos" | "history">("pos");
-  const [branchId, setBranchId] = useState(user?.branchId ?? "");
+  // Owners and managers pick a branch once; it is remembered on this device until they change it.
+  const branchKey = `gene:sales-branch:${pharmacyId}:${user?.id ?? ""}`;
+  const [branchId, setBranchIdState] = useState(user?.branchId ?? "");
+  const setBranchId = (id: string) => {
+    setBranchIdState(id);
+    if (isSeller) return;
+    try {
+      if (id) localStorage.setItem(branchKey, id);
+      else localStorage.removeItem(branchKey);
+    } catch {
+      /* private mode: the choice just isn't remembered */
+    }
+  };
   const [paymentMethod, setPaymentMethod] = useState<SalePaymentMethod>("Cash");
   const [notes, setNotes] = useState("");
   const [amountPaid, setAmountPaid] = useState<string>("");
@@ -140,6 +152,20 @@ export default function SalesPage({ params }: PageProps) {
   const [detailLoading, setDetailLoading] = useState(false);
 
   const { data: branches } = useQuery({ queryKey: ["branches", pharmacyId], queryFn: () => branchApi.list(pharmacyId) });
+  // Restore the remembered branch once the list is known - and forget it if that branch was closed or removed.
+  useEffect(() => {
+    if (isSeller || !branches || branchId) return;
+    let saved: string | null = null;
+    try {
+      saved = localStorage.getItem(branchKey);
+    } catch {
+      /* ignore */
+    }
+    const active = branches.filter((b) => b.status === "Active");
+    const pick = active.find((b) => b.id === saved) ?? (active.length === 1 ? active[0] : undefined);
+    if (pick) setBranchIdState(pick.id);
+  }, [branches, isSeller, branchId, branchKey]);
+
   const { data: categories } = useQuery({ queryKey: ["drug-categories", pharmacyId], queryFn: () => drugCategoryApi.list(pharmacyId) });
   const { data: drugsPage, isLoading: drugsLoading } = useQuery({
     queryKey: ["drugs", pharmacyId, 0, search],
