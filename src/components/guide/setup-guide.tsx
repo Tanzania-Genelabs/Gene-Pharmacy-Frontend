@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -230,21 +230,20 @@ export function SetupGuide({ pharmacyId }: { pharmacyId: string }) {
 
   return (
     <>
-      <WelcomeDialog
-        open={phase === "welcome"}
+      <GuideDialog
+        kind={phase === "welcome" || phase === "done" ? phase : null}
         forced={pending}
         name={user.firstName}
         steps={steps}
         done={done}
         replay={replay}
         onStart={start}
-        onClose={() => {
+        onCloseWelcome={() => {
           endReplay();
           setPhase("idle");
         }}
+        onFinish={() => void finish()}
       />
-
-      <DoneDialog open={phase === "done"} forced={pending} steps={steps} replay={replay} onClose={() => void finish()} />
 
       {phase === "coach" && step && (
         <CoachCard
@@ -469,8 +468,72 @@ function CoachCard({ steps, done, index, step, replay, forced, minimized, onTogg
   );
 }
 
-function WelcomeDialog({
-  open,
+/**
+ * Welcome and "all done" share ONE Radix dialog. Two separate modal dialogs that close and open in the same moment
+ * (a seller opens Sales, so the guide jumps from welcome straight to done) leave the new one with pointer-events: none -
+ * a card in the middle of the screen where nothing can be clicked.
+ */
+function GuideDialog({
+  kind,
+  forced,
+  name,
+  steps,
+  done,
+  replay,
+  onStart,
+  onCloseWelcome,
+  onFinish,
+}: {
+  kind: "welcome" | "done" | null;
+  forced: boolean;
+  name: string | null;
+  steps: GuideStep[];
+  done: DoneMap;
+  replay: boolean;
+  onStart: () => void;
+  onCloseWelcome: () => void;
+  onFinish: () => void;
+}) {
+  // Keep showing the last content while the dialog fades out.
+  const [lastKind, setLastKind] = useState<"welcome" | "done">("welcome");
+  if (kind && kind !== lastKind) setLastKind(kind);
+  const shown = kind ?? lastKind;
+  const close = shown === "welcome" ? onCloseWelcome : onFinish;
+
+  // Safety net: if Radix ever leaves the page unclickable after the dialog is gone, give the page back.
+  useEffect(() => {
+    if (kind) return;
+    const t = window.setTimeout(() => {
+      if (!document.querySelector('[role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"]')) {
+        document.body.style.pointerEvents = "";
+      }
+    }, 400);
+    return () => window.clearTimeout(t);
+  }, [kind]);
+
+  return (
+    <Dialog open={kind !== null} onOpenChange={(o) => !o && !forced && close()}>
+      <DialogContent
+        className={cn(
+          "overflow-hidden",
+          shown === "welcome" ? "max-w-md p-0" : "max-w-sm px-6 py-8 text-center",
+          forced && "[&>button]:hidden",
+        )}
+        aria-describedby={shown === "welcome" ? "guide-welcome-desc" : "guide-done-desc"}
+        onEscapeKeyDown={(e) => forced && e.preventDefault()}
+        onInteractOutside={(e) => forced && e.preventDefault()}
+      >
+        {shown === "welcome" ? (
+          <WelcomeContent forced={forced} name={name} steps={steps} done={done} replay={replay} onStart={onStart} onClose={onCloseWelcome} />
+        ) : (
+          <DoneContent steps={steps} replay={replay} onClose={onFinish} />
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function WelcomeContent({
   forced,
   name,
   steps,
@@ -479,7 +542,6 @@ function WelcomeDialog({
   onStart,
   onClose,
 }: {
-  open: boolean;
   forced: boolean;
   name: string | null;
   steps: GuideStep[];
@@ -490,13 +552,7 @@ function WelcomeDialog({
 }) {
   const doneCount = steps.filter((s) => done[s.id]).length;
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && !forced && onClose()}>
-      <DialogContent
-        className={cn("max-w-md overflow-hidden p-0", forced && "[&>button]:hidden")}
-        aria-describedby="guide-welcome-desc"
-        onEscapeKeyDown={(e) => forced && e.preventDefault()}
-        onInteractOutside={(e) => forced && e.preventDefault()}
-      >
+    <>
         <div className="bg-[var(--guide-accent)] px-6 py-6 text-white">
           <Rocket className="mb-3 h-9 w-9 guide-float" />
           <DialogTitle className="text-xl font-bold">{replay ? "Setup guide" : `Welcome${name ? `, ${name}` : ""}! Let's get your pharmacy ready`}</DialogTitle>
@@ -539,22 +595,15 @@ function WelcomeDialog({
             <ArrowRight className="h-4 w-4" />
           </Button>
         </div>
-      </DialogContent>
-    </Dialog>
+    </>
   );
 }
 
 const CONFETTI = ["#f59e0b", "#10b981", "#6366f1", "#ef4444", "#06b6d4", "#ec4899"];
 
-function DoneDialog({ open, forced, steps, replay, onClose }: { open: boolean; forced: boolean; steps: GuideStep[]; replay: boolean; onClose: () => void }) {
+function DoneContent({ steps, replay, onClose }: { steps: GuideStep[]; replay: boolean; onClose: () => void }) {
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && !forced && onClose()}>
-      <DialogContent
-        className={cn("max-w-sm overflow-hidden px-6 py-8 text-center", forced && "[&>button]:hidden")}
-        aria-describedby="guide-done-desc"
-        onEscapeKeyDown={(e) => forced && e.preventDefault()}
-        onInteractOutside={(e) => forced && e.preventDefault()}
-      >
+    <>
         <div className="pointer-events-none absolute inset-x-0 top-0 h-full overflow-hidden" aria-hidden>
           {Array.from({ length: 22 }, (_, i) => (
             <span
@@ -582,7 +631,6 @@ function DoneDialog({ open, forced, steps, replay, onClose }: { open: boolean; f
         <Button className="relative mt-5 w-full" onClick={onClose}>
           Start working
         </Button>
-      </DialogContent>
-    </Dialog>
+    </>
   );
 }
