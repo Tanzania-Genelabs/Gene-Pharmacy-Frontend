@@ -14,6 +14,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { authApi } from "@/api/auth.api";
 import { useAuthStore } from "@/store/auth.store";
 import { ThemeToggle } from "@/components/layout/theme-toggle";
+import type { AuthResponse } from "@/types";
 import Link from "next/link";
 
 const loginSchema = z.object({
@@ -27,6 +28,10 @@ function LoginForm() {
   const router = useRouter();
   const { setAuth } = useAuthStore();
   const [showPassword, setShowPassword] = useState(false);
+  // Set once the password was right for an account with two-factor: the code finishes the sign-in.
+  const [challenge, setChallenge] = useState<{ token: string; email: string } | null>(null);
+  const [code, setCode] = useState("");
+  const [verifying, setVerifying] = useState(false);
 
   const {
     register,
@@ -36,19 +41,48 @@ function LoginForm() {
     resolver: zodResolver(loginSchema),
   });
 
+  const finish = (response: AuthResponse) => {
+    setAuth(response.user, response.accessToken);
+    toast.success(`Welcome back, ${response.user.fullName}!`);
+    const { role, pharmacyId } = response.user;
+    if (role === "SuperAdmin") {
+      router.push("/admin");
+    } else if (pharmacyId) {
+      router.push(`/${pharmacyId}`);
+    } else {
+      router.push("/onboarding");
+    }
+  };
+
+  const submitCode = async () => {
+    if (!challenge || !code.trim()) return;
+    setVerifying(true);
+    try {
+      finish(await authApi.verifyTwoFactor(challenge.token, code.trim()));
+    } catch (err: unknown) {
+      const status = (err as { response?: { status?: number } })?.response?.status;
+      toast.error(
+        (err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? "That code is not right.",
+      );
+      // The ticket is single-use after too many mistakes or when it expired: start again from the password.
+      if (status === 401 || status === 423) {
+        const expired = (err as { response?: { data?: { errorCode?: string } } })?.response?.data?.errorCode === "TWO_FACTOR_EXPIRED";
+        if (expired || status === 423) setChallenge(null);
+      }
+      setCode("");
+    } finally {
+      setVerifying(false);
+    }
+  };
+
   const onSubmit = async (data: LoginFormData) => {
     try {
       const response = await authApi.login(data);
-      setAuth(response.user, response.accessToken);
-      toast.success(`Welcome back, ${response.user.fullName}!`);
-      const { role, pharmacyId } = response.user;
-      if (role === "SuperAdmin") {
-        router.push("/admin");
-      } else if (pharmacyId) {
-        router.push(`/${pharmacyId}`);
-      } else {
-        router.push("/onboarding");
+      if ("twoFactorRequired" in response) {
+        setChallenge({ token: response.challengeToken, email: response.email });
+        return;
       }
+      finish(response);
     } catch (err: unknown) {
       const message =
         (err as { response?: { data?: { message?: string } } })?.response?.data?.message ??
@@ -56,6 +90,40 @@ function LoginForm() {
       toast.error(message);
     }
   };
+
+  if (challenge) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-background p-4">
+        <Card className="w-full max-w-md shadow-xl">
+          <CardHeader className="space-y-1 pb-4">
+            <CardTitle className="text-xl">Two-factor sign-in</CardTitle>
+            <CardDescription>
+              Enter the 6-digit code from your authenticator app for {challenge.email}. Lost your phone? Use one of your recovery codes.
+            </CardDescription>
+          </CardHeader>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              void submitCode();
+            }}
+          >
+            <CardContent className="space-y-2">
+              <Label htmlFor="code">Code</Label>
+              <Input id="code" autoFocus autoComplete="one-time-code" inputMode="text" placeholder="123456" value={code} onChange={(e) => setCode(e.target.value)} />
+            </CardContent>
+            <CardFooter className="flex-col gap-3 pt-2">
+              <Button type="submit" className="w-full" disabled={verifying || !code.trim()}>
+                {verifying ? <Loader2 className="h-4 w-4 animate-spin" /> : "Verify and sign in"}
+              </Button>
+              <Button type="button" variant="ghost" className="w-full" onClick={() => { setChallenge(null); setCode(""); }}>
+                Back
+              </Button>
+            </CardFooter>
+          </form>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-background p-4">
