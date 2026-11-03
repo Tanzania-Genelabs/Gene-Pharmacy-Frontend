@@ -3,10 +3,11 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Banknote, Check, Gift, Inbox, Loader2, Search, Smartphone, Wallet, X } from "lucide-react";
+import { Banknote, Check, Download, Gift, Inbox, Loader2, Search, Smartphone, Wallet, X } from "lucide-react";
 import { adminPaymentApi } from "@/api/admin.api";
 import { pharmacyApi } from "@/api/pharmacy.api";
 import { GrantAccessDialog } from "@/components/admin/grant-access-dialog";
+import { ReasonDialog } from "@/components/admin/reason-dialog";
 import { MethodBadge } from "@/components/admin/method-badge";
 import { apiErrorMessage } from "@/lib/errors";
 import { Badge } from "@/components/ui/badge";
@@ -15,7 +16,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import type { AdminPaymentResponse, PaymentStatus } from "@/types";
+import type { AdminPaymentResponse, BulkResult, PaymentStatus } from "@/types";
 
 const selectClass =
   "h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50";
@@ -61,6 +62,10 @@ export default function AdminPaymentsPage() {
   const [approveReference, setApproveReference] = useState("");
   const [declining, setDeclining] = useState<AdminPaymentResponse | null>(null);
   const [declineReason, setDeclineReason] = useState("");
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [bulkAsk, setBulkAsk] = useState(false);
+  const [bulkResult, setBulkResult] = useState<BulkResult | null>(null);
+  const [exporting, setExporting] = useState(false);
 
   // Wait for a pause in typing before asking the server.
   useEffect(() => {
@@ -128,6 +133,28 @@ export default function AdminPaymentsPage() {
     onError: (err: unknown) => toast.error(apiErrorMessage(err, "Could not confirm this request")),
   });
 
+  const bulkApprove = useMutation({
+    mutationFn: (reason: string) => adminPaymentApi.bulkApprove([...picked], reason || undefined),
+    onSuccess: (result) => {
+      setBulkAsk(false);
+      setPicked(new Set());
+      setBulkResult(result);
+      refreshAll();
+    },
+    onError: (err: unknown) => toast.error(apiErrorMessage(err, "The bulk confirmation failed")),
+  });
+
+  async function exportCsv() {
+    setExporting(true);
+    try {
+      await adminPaymentApi.exportCsv({ method: method || undefined, status: status || undefined, from, to, search: search || undefined });
+    } catch (err) {
+      toast.error(apiErrorMessage(err, "Could not export the list"));
+    } finally {
+      setExporting(false);
+    }
+  }
+
   const declineMutation = useMutation({
     mutationFn: () => adminPaymentApi.reject(declining!.id, declineReason.trim()),
     onSuccess: (payment) => {
@@ -173,13 +200,49 @@ export default function AdminPaymentsPage() {
             Everything pharmacies have paid for their subscriptions: mobile money in the app, cash you recorded, and free promotions.
           </p>
         </div>
-        <Button onClick={() => setGrantOpen(true)}>
-          <Gift className="h-4 w-4 mr-2" />
-          Give access
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => void exportCsv()} disabled={exporting || rangeInvalid}>
+            {exporting ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Download className="h-4 w-4 mr-2" />}
+            Export CSV
+          </Button>
+          <Button onClick={() => setGrantOpen(true)}>
+            <Gift className="h-4 w-4 mr-2" />
+            Give access
+          </Button>
+        </div>
       </div>
 
       <GrantAccessDialog open={grantOpen} onOpenChange={setGrantOpen} />
+
+      <ReasonDialog
+        open={bulkAsk}
+        title={`Confirm ${picked.size} payment requests`}
+        description="Each is confirmed at its list price and gives that pharmacy its period. Only do this when you have checked the money arrived. Optional note for the audit log."
+        confirmLabel={`Confirm ${picked.size}`}
+        required={false}
+        pending={bulkApprove.isPending}
+        onConfirm={(reason) => bulkApprove.mutate(reason)}
+        onClose={() => setBulkAsk(false)}
+      />
+
+      <Dialog open={!!bulkResult} onOpenChange={(o) => !o && setBulkResult(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>{bulkResult ? `${bulkResult.done} confirmed, ${bulkResult.skipped} skipped` : ""}</DialogTitle>
+          </DialogHeader>
+          <ul className="max-h-64 divide-y overflow-y-auto px-6 text-sm">
+            {bulkResult?.results.map((r) => (
+              <li key={r.id} className="flex items-center justify-between gap-3 py-1.5">
+                <span className="font-medium">{r.name ?? r.id}</span>
+                <span className={r.ok ? "text-green-600" : "text-muted-foreground"}>{r.message}</span>
+              </li>
+            ))}
+          </ul>
+          <DialogFooter>
+            <Button onClick={() => setBulkResult(null)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Requests waiting for a decision */}
       {requests.length > 0 && (
@@ -193,9 +256,30 @@ export default function AdminPaymentsPage() {
             </CardDescription>
           </CardHeader>
           <CardContent className="divide-y">
+            <div className="flex flex-wrap items-center gap-3 pb-3 text-sm">
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={requests.length > 0 && requests.every((r) => picked.has(r.id))}
+                  onChange={(e) => setPicked(e.target.checked ? new Set(requests.map((r) => r.id)) : new Set())}
+                />
+                Select all
+              </label>
+              {picked.size > 0 && (
+                <Button size="sm" onClick={() => setBulkAsk(true)}>
+                  <Check className="h-4 w-4 mr-1" /> Confirm {picked.size} at list price
+                </Button>
+              )}
+            </div>
             {requests.map((r) => (
               <div key={r.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
-                <div className="space-y-0.5">
+                <input
+                  type="checkbox"
+                  aria-label={`Select ${r.pharmacyName ?? "request"}`}
+                  checked={picked.has(r.id)}
+                  onChange={(e) => setPicked((prev) => { const next = new Set(prev); if (e.target.checked) next.add(r.id); else next.delete(r.id); return next; })}
+                />
+                <div className="space-y-0.5 flex-1">
                   <p className="font-medium">{r.pharmacyName ?? "—"}</p>
                   <p className="text-sm">
                     {r.planType} · {r.periodLabel} · <span className="tabular-nums font-semibold">{money(r.amount)}</span>
