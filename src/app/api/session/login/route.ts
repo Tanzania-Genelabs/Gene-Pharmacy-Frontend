@@ -14,6 +14,11 @@ export async function POST(request: NextRequest) {
 
   const data = await upstream.json().catch(() => null);
 
+  // Two-factor accounts only passed the password: no session yet, just the ticket to finish with a code.
+  if (upstream.ok && data?.twoFactorRequired) {
+    return NextResponse.json({ twoFactorRequired: true, challengeToken: data.challengeToken, email: data.email });
+  }
+
   if (!upstream.ok || !data?.refreshToken) {
     const retryAfter = upstream.headers.get("Retry-After");
     return NextResponse.json(data ?? { message: "Sign-in failed" }, {
