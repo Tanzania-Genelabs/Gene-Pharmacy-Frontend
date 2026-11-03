@@ -1,18 +1,24 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { pharmacyApi } from "@/api/pharmacy.api";
+import { adminBulkApi } from "@/api/admin.api";
+import { ReasonDialog } from "@/components/admin/reason-dialog";
+import { apiErrorMessage } from "@/lib/errors";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import Link from "next/link";
 import { toast } from "sonner";
 import { PharmacyLimitsDialog } from "@/components/admin/pharmacy-limits-dialog";
 import {
@@ -24,9 +30,11 @@ import {
   Pause,
   Play,
   SlidersHorizontal,
+  ExternalLink,
+  Eye,
   Loader2,
 } from "lucide-react";
-import type { PharmacyResponse, PharmacyStatus } from "@/types";
+import type { BulkResult, PharmacyResponse, PharmacyStatus } from "@/types";
 
 const STATUS_VARIANT: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
   Active: "default",
@@ -45,10 +53,30 @@ const STATUS_OPTIONS: { value: string; label: string }[] = [
   { value: "Rejected", label: "Rejected" },
 ];
 
+type Pending =
+  | { kind: "single"; action: "reject" | "suspend"; pharmacy: PharmacyResponse }
+  | { kind: "bulk"; action: "approve" | "reject" | "suspend" | "reactivate" }
+  | null;
+
+const BULK_LABEL = { approve: "Approve", reject: "Reject", suspend: "Suspend", reactivate: "Reactivate" } as const;
+
 export default function AdminPharmaciesPage() {
+  // useSearchParams needs a Suspense boundary.
+  return (
+    <Suspense fallback={null}>
+      <PharmaciesView />
+    </Suspense>
+  );
+}
+
+function PharmaciesView() {
   const queryClient = useQueryClient();
+  const initialStatus = useSearchParams().get("status");
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [statusFilter, setStatusFilter] = useState<string>(initialStatus && STATUS_OPTIONS.some((o) => o.value === initialStatus) ? initialStatus : "all");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [pending, setPending] = useState<Pending>(null);
+  const [bulkResult, setBulkResult] = useState<BulkResult | null>(null);
   const [page, setPage] = useState(0);
   const [limitsFor, setLimitsFor] = useState<PharmacyResponse | null>(null);
 
@@ -65,24 +93,31 @@ export default function AdminPharmaciesPage() {
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["admin", "pharmacies"] });
 
   const approveMutation = useMutation({
-    mutationFn: pharmacyApi.approve,
+    mutationFn: (id: string) => pharmacyApi.approve(id),
     onSuccess: () => { toast.success("Pharmacy approved"); invalidate(); },
-    onError: () => toast.error("Failed to approve"),
-  });
-  const rejectMutation = useMutation({
-    mutationFn: pharmacyApi.reject,
-    onSuccess: () => { toast.success("Pharmacy rejected"); invalidate(); },
-    onError: () => toast.error("Failed to reject"),
-  });
-  const suspendMutation = useMutation({
-    mutationFn: pharmacyApi.suspend,
-    onSuccess: () => { toast.success("Pharmacy suspended"); invalidate(); },
-    onError: () => toast.error("Failed to suspend"),
+    onError: (e) => toast.error(apiErrorMessage(e, "Failed to approve")),
   });
   const reactivateMutation = useMutation({
-    mutationFn: pharmacyApi.reactivate,
+    mutationFn: (id: string) => pharmacyApi.reactivate(id),
     onSuccess: () => { toast.success("Pharmacy reactivated"); invalidate(); },
-    onError: () => toast.error("Failed to reactivate"),
+    onError: (e) => toast.error(apiErrorMessage(e, "Failed to reactivate")),
+  });
+  const reasonedMutation = useMutation({
+    mutationFn: async ({ action, id, reason }: { action: "reject" | "suspend"; id: string; reason: string }) =>
+      action === "reject" ? pharmacyApi.reject(id, reason) : pharmacyApi.suspend(id, reason),
+    onSuccess: (_d, v) => { toast.success(v.action === "reject" ? "Pharmacy rejected" : "Pharmacy suspended"); setPending(null); invalidate(); },
+    onError: (e) => toast.error(apiErrorMessage(e, "Could not complete that")),
+  });
+  const bulkMutation = useMutation({
+    mutationFn: ({ action, reason }: { action: "approve" | "reject" | "suspend" | "reactivate"; reason?: string }) =>
+      adminBulkApi.pharmacies(action, [...selected], reason),
+    onSuccess: (result) => {
+      setPending(null);
+      setSelected(new Set());
+      setBulkResult(result);
+      invalidate();
+    },
+    onError: (e) => toast.error(apiErrorMessage(e, "The bulk action failed")),
   });
 
   const pharmacies: PharmacyResponse[] = data?.content ?? [];
@@ -128,6 +163,19 @@ export default function AdminPharmaciesPage() {
         </select>
       </div>
 
+      {selected.size > 0 && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/40 px-4 py-2 text-sm">
+          <span className="font-medium">{selected.size} selected</span>
+          {(["approve", "reject", "suspend", "reactivate"] as const).map((a) => (
+            <Button key={a} size="sm" variant={a === "reject" || a === "suspend" ? "outline" : "default"} onClick={() => setPending({ kind: "bulk", action: a })}>
+              {BULK_LABEL[a]}
+            </Button>
+          ))}
+          <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>Clear</Button>
+          <span className="text-xs text-muted-foreground">Pharmacies the action does not fit are skipped, never changed.</span>
+        </div>
+      )}
+
       {/* Table */}
       <Card>
         <CardHeader>
@@ -152,6 +200,14 @@ export default function AdminPharmaciesPage() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b text-left text-muted-foreground">
+                    <th className="pb-3 w-8">
+                      <input
+                        type="checkbox"
+                        aria-label="Select all on this page"
+                        checked={filtered.length > 0 && filtered.every((p) => selected.has(p.id))}
+                        onChange={(e) => setSelected(e.target.checked ? new Set(filtered.map((p) => p.id)) : new Set())}
+                      />
+                    </th>
                     <th className="pb-3 font-medium">Name</th>
                     <th className="pb-3 font-medium">Registration #</th>
                     <th className="pb-3 font-medium">City</th>
@@ -165,7 +221,15 @@ export default function AdminPharmaciesPage() {
                 <tbody className="divide-y">
                   {filtered.map((p) => (
                     <tr key={p.id} className="hover:bg-muted/50 transition-colors">
-                      <td className="py-3 font-medium">{p.name}</td>
+                      <td className="py-3">
+                        <input
+                          type="checkbox"
+                          aria-label={`Select ${p.name}`}
+                          checked={selected.has(p.id)}
+                          onChange={(e) => setSelected((prev) => { const next = new Set(prev); if (e.target.checked) next.add(p.id); else next.delete(p.id); return next; })}
+                        />
+                      </td>
+                      <td className="py-3 font-medium"><Link href={`/admin/pharmacies/${p.id}`} className="hover:underline">{p.name}</Link></td>
                       <td className="py-3 font-mono text-xs">{p.registrationNumber}</td>
                       <td className="py-3">{p.city}</td>
                       <td className="py-3">{p.email}</td>
@@ -184,12 +248,18 @@ export default function AdminPharmaciesPage() {
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
+                            <DropdownMenuItem asChild>
+                              <Link href={`/${p.id}`}><ExternalLink className="mr-2 h-4 w-4" /> Open workspace</Link>
+                            </DropdownMenuItem>
+                            <DropdownMenuItem asChild>
+                              <Link href={`/admin/pharmacies/${p.id}`}><Eye className="mr-2 h-4 w-4" /> Details & people</Link>
+                            </DropdownMenuItem>
                             {p.status === "PendingApproval" && (
                               <>
                                 <DropdownMenuItem onClick={() => approveMutation.mutate(p.id)}>
                                   <CheckCircle className="mr-2 h-4 w-4 text-green-600" /> Approve
                                 </DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => rejectMutation.mutate(p.id)}>
+                                <DropdownMenuItem onClick={() => setPending({ kind: "single", action: "reject", pharmacy: p })}>
                                   <XCircle className="mr-2 h-4 w-4 text-red-600" /> Reject
                                 </DropdownMenuItem>
                               </>
@@ -198,7 +268,7 @@ export default function AdminPharmaciesPage() {
                               <SlidersHorizontal className="mr-2 h-4 w-4" /> Plan limits…
                             </DropdownMenuItem>
                             {p.status === "Active" && (
-                              <DropdownMenuItem onClick={() => suspendMutation.mutate(p.id)}>
+                              <DropdownMenuItem onClick={() => setPending({ kind: "single", action: "suspend", pharmacy: p })}>
                                 <Pause className="mr-2 h-4 w-4 text-orange-500" /> Suspend
                               </DropdownMenuItem>
                             )}
@@ -235,6 +305,46 @@ export default function AdminPharmaciesPage() {
           )}
         </CardContent>
       </Card>
+
+      <ReasonDialog
+        open={pending !== null}
+        title={
+          pending?.kind === "single"
+            ? `${pending.action === "reject" ? "Reject" : "Suspend"} ${pending.pharmacy.name}`
+            : pending ? `${BULK_LABEL[pending.action]} ${selected.size} pharmacies` : ""
+        }
+        description={
+          pending?.action === "approve" || pending?.action === "reactivate"
+            ? "Optional note for the audit log."
+            : "The owner is told this was done. Say why - it is saved in the audit log with your name."
+        }
+        confirmLabel={pending ? (pending.kind === "single" ? (pending.action === "reject" ? "Reject" : "Suspend") : BULK_LABEL[pending.action]) : "Confirm"}
+        destructive={pending?.action === "reject" || pending?.action === "suspend"}
+        required={pending?.action === "reject" || pending?.action === "suspend"}
+        pending={reasonedMutation.isPending || bulkMutation.isPending}
+        onConfirm={(reason) => {
+          if (!pending) return;
+          if (pending.kind === "single") reasonedMutation.mutate({ action: pending.action, id: pending.pharmacy.id, reason });
+          else bulkMutation.mutate({ action: pending.action, reason: reason || undefined });
+        }}
+        onClose={() => setPending(null)}
+      />
+
+      <Dialog open={!!bulkResult} onOpenChange={(o) => !o && setBulkResult(null)}>
+        <DialogContent className="max-w-md p-6" aria-describedby="bulk-desc">
+          <DialogTitle>{bulkResult ? `${BULK_LABEL[bulkResult.action.split(".").pop() as keyof typeof BULK_LABEL] ?? "Bulk action"}: ${bulkResult.done} done, ${bulkResult.skipped} skipped` : ""}</DialogTitle>
+          <DialogDescription id="bulk-desc" className="mt-1">Recorded in the audit log.</DialogDescription>
+          <ul className="mt-3 max-h-64 divide-y overflow-y-auto text-sm">
+            {bulkResult?.results.map((r) => (
+              <li key={r.id} className="flex items-center justify-between gap-3 py-1.5">
+                <span className="font-medium">{r.name ?? r.id}</span>
+                <span className={r.ok ? "text-green-600" : "text-muted-foreground"}>{r.message}</span>
+              </li>
+            ))}
+          </ul>
+          <Button className="mt-4 w-full" onClick={() => setBulkResult(null)}>Close</Button>
+        </DialogContent>
+      </Dialog>
 
       <PharmacyLimitsDialog
         pharmacyId={limitsFor?.id ?? null}
