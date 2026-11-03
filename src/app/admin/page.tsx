@@ -3,10 +3,11 @@
 import { useQuery } from "@tanstack/react-query";
 import { pharmacyApi } from "@/api/pharmacy.api";
 import { adminUserApi } from "@/api/admin.api";
-import { adminSubscriptionApi } from "@/api/admin.api";
+import { adminSubscriptionApi, adminOverviewApi } from "@/api/admin.api";
 import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { ActionCenter } from "@/components/admin/action-center";
 import { Button } from "@/components/ui/button";
 import {
   Building2,
@@ -22,6 +23,10 @@ import {
   CreditCard,
   ArrowRight,
   TrendingUp,
+  AlertTriangle,
+  ShoppingCart,
+  Pill,
+  Trophy,
 } from "lucide-react";
 import type { PharmacyResponse } from "@/types";
 
@@ -32,6 +37,10 @@ const STATUS_VARIANT: Record<string, "default" | "secondary" | "destructive" | "
   Deactivated: "outline",
   Rejected: "destructive",
 };
+
+function tzs(value: string | number): string {
+  return `TSh ${Math.round(Number(value)).toLocaleString()}`;
+}
 
 function StatCard({
   label,
@@ -75,6 +84,11 @@ export default function AdminDashboardPage() {
     queryFn: () => adminSubscriptionApi.stats(),
   });
 
+  const { data: overview } = useQuery({
+    queryKey: ["admin", "overview"],
+    queryFn: () => adminOverviewApi.get(),
+  });
+
   const all: PharmacyResponse[] = pharmacies?.content ?? [];
   const active = all.filter((p) => p.status === "Active");
   const pending = all.filter((p) => p.status === "PendingApproval");
@@ -97,6 +111,79 @@ export default function AdminDashboardPage() {
           </Button>
         </div>
       </div>
+
+      {overview && <ActionCenter actions={overview.actions} />}
+
+      {/* Sales across the platform */}
+      {overview && (
+        <div>
+          <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3 flex items-center gap-2">
+            <ShoppingCart className="h-4 w-4" /> Sales across all pharmacies
+          </h2>
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+            <StatCard label="Sales today" value={tzs(overview.sales.todayRevenue)} icon={ShoppingCart} description={`${overview.sales.todayCount} sales`} />
+            <StatCard label="Last 30 days" value={tzs(overview.sales.last30Revenue)} icon={TrendingUp} description={`${overview.sales.last30Count} sales`} />
+            <StatCard label="All time" value={tzs(overview.sales.allTimeRevenue)} icon={Trophy} description={`${overview.sales.allTimeCount} sales`} />
+            <StatCard label="Products · branches" value={`${overview.inventory.drugs} · ${overview.inventory.branches}`} icon={Pill} description="Across the platform" />
+          </div>
+        </div>
+      )}
+
+      {/* Needs attention + growth */}
+      {overview && (
+        <div className="grid gap-4 lg:grid-cols-2">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2"><AlertTriangle className="h-4 w-4 text-amber-500" /> Needs attention</CardTitle>
+              <CardDescription>{overview.attention.length === 0 ? "Everything looks fine." : `${overview.attention.length} pharmacies to look at`}</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <ul className="divide-y text-sm">
+                {overview.attention.slice(0, 8).map((a, i) => (
+                  <li key={`${a.pharmacyId}-${i}`} className="flex items-center justify-between gap-3 py-2">
+                    <Link href={`/admin/pharmacies/${a.pharmacyId}`} className="font-medium hover:underline">{a.name}</Link>
+                    <span className="text-right text-muted-foreground">{a.reason}</span>
+                  </li>
+                ))}
+              </ul>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2"><Trophy className="h-4 w-4 text-amber-500" /> Top pharmacies (30 days)</CardTitle>
+              <CardDescription>By sales revenue</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {overview.topPharmacies.length === 0 ? (
+                <p className="py-4 text-sm text-muted-foreground">No sales in the last 30 days.</p>
+              ) : (
+                <ul className="divide-y text-sm">
+                  {overview.topPharmacies.map((t) => (
+                    <li key={t.pharmacyId} className="flex items-center justify-between gap-3 py-2">
+                      <Link href={`/admin/pharmacies/${t.pharmacyId}`} className="font-medium hover:underline">{t.name}</Link>
+                      <span className="text-muted-foreground">{tzs(t.revenue)} · {t.sales} sales</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <p className="mt-4 mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">New pharmacies per month</p>
+              <div className="flex items-end gap-2">
+                {overview.signups.map((m) => {
+                  const max = Math.max(1, ...overview.signups.map((x) => x.count));
+                  return (
+                    <div key={m.month} className="flex flex-1 flex-col items-center gap-1" title={`${m.label}: ${m.count}`}>
+                      <span className="text-xs">{m.count}</span>
+                      <div className="w-full rounded-t bg-primary/70" style={{ height: `${Math.max(4, (m.count / max) * 48)}px` }} />
+                      <span className="text-[10px] text-muted-foreground">{m.label.split(" ")[0]}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
 
       {/* Pharmacy stats */}
       <div>
@@ -181,7 +268,7 @@ export default function AdminDashboardPage() {
                 <tbody className="divide-y">
                   {all.slice(0, 10).map((p) => (
                     <tr key={p.id} className="hover:bg-muted/50 transition-colors">
-                      <td className="py-3 font-medium">{p.name}</td>
+                      <td className="py-3 font-medium"><Link href={`/admin/pharmacies/${p.id}`} className="hover:underline">{p.name}</Link></td>
                       <td className="py-3">{p.city}</td>
                       <td className="py-3">{p.phone}</td>
                       <td className="py-3">
