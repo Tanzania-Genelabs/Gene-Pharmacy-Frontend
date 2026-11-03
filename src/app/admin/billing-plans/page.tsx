@@ -11,6 +11,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { apiErrorMessage } from "@/lib/errors";
+import { ReasonDialog } from "@/components/admin/reason-dialog";
 import type { AdminBillingPlan, BillingPlan } from "@/types";
 
 const money = (value: string | number) => `TZS ${Number(value).toLocaleString()}`;
@@ -46,9 +47,11 @@ function PlanRow({ plan }: { plan: AdminBillingPlan }) {
   const fourWeeks = weekly.trim() !== "" && weeklyValid ? weeklyNumber * 4 : null;
   const premiumPct = fourWeeks !== null && monthlyValid ? Math.round(((fourWeeks - monthlyNumber) / monthlyNumber) * 100) : null;
 
+  const [askReason, setAskReason] = useState(false);
   const save = useMutation({
-    mutationFn: () =>
+    mutationFn: (reason: string) =>
       adminBillingPlanApi.update(plan.planType as BillingPlan, {
+        reason,
         monthlyPrice: monthlyNumber,
         weeklyPrice: weekly.trim() === "" ? null : weeklyNumber,
         maxUsers: maxUsers.trim() === "" ? null : Number(maxUsers),
@@ -61,6 +64,7 @@ function PlanRow({ plan }: { plan: AdminBillingPlan }) {
         `${saved.planType}: ${money(saved.monthlyPrice)} per month, ${saved.weeklyPrice ? `${money(saved.weeklyPrice)} per week` : "not sold weekly"}, ${saved.active ? "on sale" : "switched off"}`,
       );
       qc.invalidateQueries({ queryKey: ["admin", "billing-plans"] });
+      setAskReason(false);
     },
     onError: (err: unknown) => toast.error(apiErrorMessage(err, "Could not save the plan")),
   });
@@ -169,9 +173,18 @@ function PlanRow({ plan }: { plan: AdminBillingPlan }) {
         )}
       </TableCell>
       <TableCell className="text-right">
-        <Button size="sm" disabled={!dirty || !monthlyValid || !weeklyValid || !usersValid || !branchesValid || save.isPending} onClick={() => save.mutate()}>
+        <Button size="sm" disabled={!dirty || !monthlyValid || !weeklyValid || !usersValid || !branchesValid || save.isPending} onClick={() => setAskReason(true)}>
           {save.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save"}
         </Button>
+        <ReasonDialog
+          open={askReason}
+          title={`Change the ${plan.planType} plan`}
+          description="Prices and limits affect every pharmacy on this plan. Say why you are changing them."
+          confirmLabel="Save plan"
+          pending={save.isPending}
+          onConfirm={(reason) => save.mutate(reason)}
+          onClose={() => setAskReason(false)}
+        />
       </TableCell>
     </TableRow>
   );
