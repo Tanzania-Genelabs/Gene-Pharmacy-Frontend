@@ -1559,3 +1559,11 @@ export interface ProfitReport {
     netProfit: string | null;
   }[];
 }
+
+/** Platform-wide switches a SuperAdmin controls from Admin > Settings. */
+export interface AdminPlatformSettings {
+  /** "auto": a new pharmacy is approved at once. "manual": it waits for a SuperAdmin. */
+  pharmacyApprovalMode: "auto" | "manual";
+  updatedBy: string | null;
+  updatedAt: string | null;
+}
