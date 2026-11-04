@@ -3,6 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { adminSystemApi } from "@/api/admin.api";
 import { timeAgo } from "@/lib/audit";
+import { ApprovalModeCard } from "@/components/admin/approval-mode-card";
 import { TwoFactorCard } from "@/components/admin/two-factor-card";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -68,6 +69,8 @@ export default function AdminSettingsPage() {
           </CardContent>
         </Card>
       )}
+
+      <ApprovalModeCard />
 
       <TwoFactorCard />
 
