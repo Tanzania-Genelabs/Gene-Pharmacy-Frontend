@@ -7,6 +7,7 @@ import type {
   AuditFacets,
   AuditLogResponse,
   SystemStatus,
+  AdminPlatformSettings,
   AdminOverview,
   AdminBillingPlan,
   CatalogFacets,
@@ -154,6 +155,12 @@ export const adminOverviewApi = {
 export const adminSystemApi = {
   /** Live measurements of the running platform (database, scheduler, backups, payments, ...). */
   status: () => api.get<SystemStatus>("/api/v1/admin/system").then((r) => r.data),
+};
+
+export const adminSettingsApi = {
+  get: () => api.get<AdminPlatformSettings>("/api/v1/admin/settings").then((r) => r.data),
+  setApprovalMode: (mode: AdminPlatformSettings["pharmacyApprovalMode"]) =>
+    api.put<AdminPlatformSettings>("/api/v1/admin/settings", { pharmacyApprovalMode: mode }).then((r) => r.data),
 };
 
 // ─── Admin Payments (ledger of what pharmacies paid) ──────────────────────────
