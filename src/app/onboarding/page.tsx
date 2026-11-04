@@ -72,6 +72,12 @@ export default function OnboardingPage() {
       const pharmacy = await pharmacyApi.create(data);
       setPharmacyId(pharmacy.id);
       setExistingPharmacy(pharmacy);
+      if (pharmacy.status === "Active") {
+        // Automatic approval is on: the pharmacy is ready, so go straight in.
+        toast.success("Pharmacy registered and approved. Welcome!");
+        router.replace(`/${pharmacy.id}`);
+        return;
+      }
       setPageState("done");
       toast.success("Pharmacy registered! Awaiting admin approval.");
     } catch (err: unknown) {
