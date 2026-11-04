@@ -31,7 +31,6 @@ import {
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { useAuthStore } from "@/store/auth.store";
 import { useGuideStore } from "@/store/guide.store";
 
@@ -114,12 +113,12 @@ export function Sidebar({ pharmacyId, pharmacyName = "Gene Pharmacy" }: SidebarP
     <TooltipProvider delayDuration={0}>
       <aside
         className={cn(
-          "relative flex flex-col h-screen border-r border-border bg-sidebar transition-[width] duration-200 ease-in-out",
+          "relative flex flex-col h-full shrink-0 overflow-hidden border-r border-border bg-sidebar transition-[width] duration-200 ease-in-out",
           collapsed ? "w-16" : "w-64"
         )}
       >
         {/* Logo + pharmacy name */}
-        <div className="flex items-center gap-3 px-4 py-5 border-b border-border min-h-[64px]">
+        <div className="flex items-center gap-3 px-4 py-5 border-b border-border min-h-[64px] shrink-0">
           <div className="flex-shrink-0 flex items-center justify-center w-8 h-8 rounded-lg bg-primary text-primary-foreground">
             <Pill className="w-4 h-4" />
           </div>
@@ -129,7 +128,7 @@ export function Sidebar({ pharmacyId, pharmacyName = "Gene Pharmacy" }: SidebarP
         </div>
 
         {/* Navigation */}
-        <ScrollArea className="flex-1 py-3">
+        <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain py-3">
           <nav className="flex flex-col gap-1 px-2">
             {navItems.map((item) => {
               const isActive = pathname === item.href || (item.href !== `/${pharmacyId}` && pathname.startsWith(item.href));
@@ -177,10 +176,10 @@ export function Sidebar({ pharmacyId, pharmacyName = "Gene Pharmacy" }: SidebarP
               return <div key={item.href}>{linkContent}</div>;
             })}
           </nav>
-        </ScrollArea>
+        </div>
 
         {/* Collapse toggle */}
-        <div className="border-t border-border p-2 space-y-1">
+        <div className="shrink-0 border-t border-border p-2 space-y-1">
           {!guided && (
           <Button
             variant="ghost"
