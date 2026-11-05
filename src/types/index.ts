@@ -232,6 +232,8 @@ export interface DrugResponse {
   id: string;
   pharmacyId: string;
   name: string;
+  /** The brand this drug is sold under (one medicine can be stocked under several brands). */
+  brand?: string | null;
   genericName: string | null;
   barcode: string | null;
   /** The smallest unit sold (e.g. tablet). Prices, stock and sale quantities are all counted in it. */
@@ -256,6 +258,7 @@ export interface DrugResponse {
 
 export interface CreateDrugRequest {
   name: string;
+  brand?: string;
   genericName?: string;
   barcode?: string;
   unit: string;
@@ -274,6 +277,7 @@ export interface CreateDrugRequest {
  */
 export interface UpdateDrugRequest {
   name?: string;
+  brand?: string | null;
   genericName?: string | null;
   barcode?: string | null;
   unit?: string;
@@ -303,6 +307,8 @@ export interface CatalogItem {
   id: string;
   kind: CatalogKind;
   name: string;
+  /** The brand name, e.g. "Ketoz". The same medicine appears once per brand. */
+  brand?: string | null;
   genericName: string | null;
   strength: string | null;
   form: string | null;
@@ -334,6 +340,8 @@ export interface AddFromCatalogEntry {
   sellingPrice: number;
   buyingPrice?: number;
   reorderLevel?: number;
+  /** File the product under this brand instead of (or as well as) the catalog's own brand. */
+  brand?: string;
 }
 
 export interface AddFromCatalogResult {
@@ -363,6 +371,7 @@ export interface CatalogStats {
 
 export interface CatalogItemInput {
   name: string;
+  brand?: string | null;
   kind?: CatalogKind;
   genericName?: string | null;
   strength?: string | null;
