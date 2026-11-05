@@ -15,11 +15,19 @@ import type { AddFromCatalogResult, CatalogItem, CatalogKind } from "@/types";
 const selectClass =
   "h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50";
 
+/** One line to add. A product can have several lines, one per brand the pharmacy stocks it under. */
 interface PriceDraft {
+  key: string;
+  brand: string;
   selling: string;
   buying: string;
   reorder: string;
 }
+
+let lineCounter = 0;
+const newLine = (brand = ""): PriceDraft => ({ key: `line-${++lineCounter}`, brand, selling: "", buying: "", reorder: "10" });
+// The first line of an item has a stable key, so what is typed into it survives re-renders.
+const firstLine = (item: CatalogItem): PriceDraft => ({ key: `first-${item.id}`, brand: item.brand ?? "", selling: "", buying: "", reorder: "10" });
 
 interface CatalogPickerDialogProps {
   pharmacyId: string;
@@ -31,7 +39,8 @@ interface CatalogPickerDialogProps {
 
 /**
  * Add drugs to a pharmacy by picking them from the shared catalog instead of typing them in.
- * Step 1: search and tick items. Step 2: enter this pharmacy's own prices. Nothing is added without a price.
+ * Step 1: search and tick items. Step 2: enter this pharmacy's own prices, and add the same product again
+ * under other brand names if it is stocked under several. Nothing is added without a price.
  */
 export function CatalogPickerDialog({ pharmacyId, open, onOpenChange, initialSearch }: CatalogPickerDialogProps) {
   return (
@@ -61,7 +70,8 @@ function PickerBody({ pharmacyId, initialSearch, onClose }: { pharmacyId: string
   const [page, setPage] = useState(0);
   // Selections survive paging and searching, so a whole shopping list can be built up.
   const [selected, setSelected] = useState<Record<string, CatalogItem>>({});
-  const [prices, setPrices] = useState<Record<string, PriceDraft>>({});
+  // Lines per catalog item id; the first line is the catalog's own brand, extra lines are other brands.
+  const [lines, setLines] = useState<Record<string, PriceDraft[]>>({});
   const [result, setResult] = useState<AddFromCatalogResult | null>(null);
 
   // Wait for a pause in typing before asking the server.
@@ -89,7 +99,8 @@ function PickerBody({ pharmacyId, initialSearch, onClose }: { pharmacyId: string
   });
 
   const items = data?.content ?? [];
-  const selectable = items.filter((i) => !i.alreadyAdded);
+  // Already-added products stay selectable: the same medicine can be added again under another brand.
+  const selectable = items;
   const chosen = Object.values(selected);
   const allOnPageChosen = selectable.length > 0 && selectable.every((i) => selected[i.id]);
 
@@ -113,25 +124,39 @@ function PickerBody({ pharmacyId, initialSearch, onClose }: { pharmacyId: string
     });
   }
 
-  const blankDraft: PriceDraft = { selling: "", buying: "", reorder: "10" };
-  const draftFor = (id: string): PriceDraft => (prices[id] as PriceDraft | undefined) ?? blankDraft;
+  const linesFor = (item: CatalogItem): PriceDraft[] => lines[item.id] ?? [firstLine(item)];
+  const allLines = chosen.flatMap((item) => linesFor(item).map((line, index) => ({ item, line, index })));
 
-  function setPrice(id: string, field: keyof PriceDraft, value: string) {
-    setPrices((current) => ({ ...current, [id]: { ...((current[id] as PriceDraft | undefined) ?? blankDraft), [field]: value } }));
+  function editLines(item: CatalogItem, change: (current: PriceDraft[]) => PriceDraft[]) {
+    setLines((current) => ({ ...current, [item.id]: change(current[item.id] ?? [firstLine(item)]) }));
   }
-  const missingPrice = chosen.filter((item) => !(Number(draftFor(item.id).selling) > 0));
+  const setField = (item: CatalogItem, key: string, field: keyof Omit<PriceDraft, "key">, value: string) =>
+    editLines(item, (current) => current.map((l) => (l.key === key ? { ...l, [field]: value } : l)));
+
+  const brandKey = (value: string) => value.trim().toLowerCase();
+  const isDuplicateBrand = (item: CatalogItem, line: PriceDraft) =>
+    linesFor(item).some((other) => other.key !== line.key && brandKey(other.brand) === brandKey(line.brand));
+  const lineProblem = (item: CatalogItem, line: PriceDraft, index: number): string | null => {
+    if (!(Number(line.selling) > 0)) return "Enter a selling price";
+    if (index > 0 && line.brand.trim() === "") return "Type the brand name";
+    if (isDuplicateBrand(item, line)) return "Same brand listed twice";
+    return null;
+  };
+  const problems = allLines.filter(({ item, line, index }) => lineProblem(item, line, index) !== null);
 
   const addMutation = useMutation({
     mutationFn: () =>
       catalogApi.add(
         pharmacyId,
-        chosen.map((item) => {
-          const d = draftFor(item.id);
+        allLines.map(({ item, line }) => {
+          const brand = line.brand.trim();
           return {
             catalogItemId: item.id,
-            sellingPrice: Number(d.selling),
-            buyingPrice: d.buying.trim() === "" ? undefined : Number(d.buying),
-            reorderLevel: d.reorder.trim() === "" ? undefined : Number(d.reorder),
+            sellingPrice: Number(line.selling),
+            buyingPrice: line.buying.trim() === "" ? undefined : Number(line.buying),
+            reorderLevel: line.reorder.trim() === "" ? undefined : Number(line.reorder),
+            // Only sent when it differs from the catalog's own brand.
+            brand: brand !== "" && brandKey(brand) !== brandKey(item.brand ?? "") ? brand : undefined,
           };
         }),
       ),
@@ -166,8 +191,8 @@ function PickerBody({ pharmacyId, initialSearch, onClose }: { pharmacyId: string
             <div className="rounded-md border p-3 text-sm">
               <p className="font-medium mb-2">{result.skipped.length} could not be added:</p>
               <ul className="space-y-1 text-muted-foreground">
-                {result.skipped.map((s) => (
-                  <li key={s.catalogItemId}>
+                {result.skipped.map((s, i) => (
+                  <li key={`${s.catalogItemId}-${i}`}>
                     <span className="text-foreground">{s.name ?? "Unknown item"}</span>: {s.message}
                   </li>
                 ))}
@@ -188,60 +213,104 @@ function PickerBody({ pharmacyId, initialSearch, onClose }: { pharmacyId: string
       <>
         <div className="px-6 py-2 overflow-y-auto">
           <p className="text-sm text-muted-foreground mb-3">
-            Enter <strong>your</strong> selling price for each product (required). Buying price and reorder level are optional.
+            Enter <strong>your</strong> selling price for each product (required). Stocking the same medicine under more
+            than one brand? Use <strong>Add another brand</strong> under it. Buying price and reorder level are optional.
           </p>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b text-left text-muted-foreground">
                   <th className="pb-2 font-medium">Product</th>
+                  <th className="pb-2 font-medium w-40">Brand</th>
                   <th className="pb-2 font-medium w-36">Selling price (TZS) *</th>
                   <th className="pb-2 font-medium w-36">Buying price (TZS)</th>
-                  <th className="pb-2 font-medium w-28">Reorder level</th>
+                  <th className="pb-2 font-medium w-24">Reorder level</th>
+                  <th className="pb-2 w-8" />
                 </tr>
               </thead>
               <tbody className="divide-y">
-                {chosen.map((item) => {
-                  const d = draftFor(item.id);
-                  return (
-                    <tr key={item.id}>
-                      <td className="py-2 pr-3">
-                        <p className="font-medium">{item.name}</p>
-                        <p className="text-xs text-muted-foreground">{item.category ?? item.kind}</p>
-                      </td>
-                      <td className="py-2 pr-3">
-                        <Input
-                          type="number"
-                          min={0}
-                          step="any"
-                          inputMode="decimal"
-                          aria-label={`${item.name} selling price`}
-                          value={d.selling}
-                          onChange={(e) => setPrice(item.id, "selling", e.target.value)}
-                          className={d.selling !== "" && !(Number(d.selling) > 0) ? "border-destructive" : ""}
-                        />
-                      </td>
-                      <td className="py-2 pr-3">
-                        <Input type="number" min={0} step="any" inputMode="decimal" aria-label={`${item.name} buying price`} value={d.buying} onChange={(e) => setPrice(item.id, "buying", e.target.value)} />
-                      </td>
-                      <td className="py-2">
-                        <Input type="number" min={0} step={1} aria-label={`${item.name} reorder level`} value={d.reorder} onChange={(e) => setPrice(item.id, "reorder", e.target.value)} />
-                      </td>
-                    </tr>
-                  );
-                })}
+                {chosen.flatMap((item) =>
+                  linesFor(item).map((d, index) => {
+                    const problem = lineProblem(item, d, index);
+                    const showProblem = problem !== null && (d.selling !== "" || d.brand !== "" || isDuplicateBrand(item, d));
+                    return (
+                      <tr key={d.key} className={index > 0 ? "bg-muted/30" : ""}>
+                        <td className="py-2 pr-3 align-top">
+                          {index === 0 ? (
+                            <>
+                              <p className="font-medium">{item.name}</p>
+                              <p className="text-xs text-muted-foreground">{[item.manufacturer, item.category ?? item.kind].filter(Boolean).join(" · ")}</p>
+                              {item.alreadyAdded && item.addedAs && (
+                                <p className="text-xs text-amber-600 dark:text-amber-400">You already have: {item.addedAs}</p>
+                              )}
+                              <button
+                                type="button"
+                                className="mt-1 text-xs font-medium text-primary hover:underline"
+                                onClick={() => editLines(item, (current) => [...current, newLine()])}
+                              >
+                                + Add another brand
+                              </button>
+                            </>
+                          ) : (
+                            <p className="pl-3 text-xs text-muted-foreground">↳ same product, another brand</p>
+                          )}
+                        </td>
+                        <td className="py-2 pr-3 align-top">
+                          <Input
+                            aria-label={`${item.name} brand`}
+                            placeholder={index === 0 && !item.brand ? "optional" : "Brand name"}
+                            value={d.brand}
+                            onChange={(e) => setField(item, d.key, "brand", e.target.value)}
+                            className={showProblem && problem !== "Enter a selling price" ? "border-destructive" : ""}
+                          />
+                        </td>
+                        <td className="py-2 pr-3 align-top">
+                          <Input
+                            type="number"
+                            min={0}
+                            step="any"
+                            inputMode="decimal"
+                            aria-label={`${item.name} selling price`}
+                            value={d.selling}
+                            onChange={(e) => setField(item, d.key, "selling", e.target.value)}
+                            className={d.selling !== "" && !(Number(d.selling) > 0) ? "border-destructive" : ""}
+                          />
+                          {showProblem && <p className="mt-0.5 text-[11px] text-destructive">{problem}</p>}
+                        </td>
+                        <td className="py-2 pr-3 align-top">
+                          <Input type="number" min={0} step="any" inputMode="decimal" aria-label={`${item.name} buying price`} value={d.buying} onChange={(e) => setField(item, d.key, "buying", e.target.value)} />
+                        </td>
+                        <td className="py-2 align-top">
+                          <Input type="number" min={0} step={1} aria-label={`${item.name} reorder level`} value={d.reorder} onChange={(e) => setField(item, d.key, "reorder", e.target.value)} />
+                        </td>
+                        <td className="py-2 pl-1 align-top">
+                          {index > 0 && (
+                            <button
+                              type="button"
+                              aria-label="Remove this brand"
+                              className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+                              onClick={() => editLines(item, (current) => current.filter((l) => l.key !== d.key))}
+                            >
+                              ×
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  }),
+                )}
               </tbody>
             </table>
           </div>
         </div>
         <DialogFooter className="px-6 py-4 border-t items-center sm:justify-between">
           <p className="text-sm text-muted-foreground">
-            {missingPrice.length > 0 ? `${missingPrice.length} still need a selling price` : `${chosen.length} ready to add`}
+            {problems.length > 0 ? `${problems.length} line${problems.length === 1 ? "" : "s"} still need attention` : `${allLines.length} ready to add`}
           </p>
           <div className="flex gap-2">
             <Button variant="outline" onClick={() => setStep("choose")}>Back</Button>
-            <Button disabled={missingPrice.length > 0 || addMutation.isPending} onClick={() => addMutation.mutate()}>
-              {addMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : `Add ${chosen.length} drug${chosen.length === 1 ? "" : "s"}`}
+            <Button disabled={problems.length > 0 || addMutation.isPending} onClick={() => addMutation.mutate()}>
+              {addMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : `Add ${allLines.length} drug${allLines.length === 1 ? "" : "s"}`}
             </Button>
           </div>
         </DialogFooter>
@@ -255,7 +324,7 @@ function PickerBody({ pharmacyId, initialSearch, onClose }: { pharmacyId: string
       <div className="px-6 pb-3 flex flex-col gap-2 sm:flex-row sm:items-center">
         <div className="relative flex-1">
           <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-          <Input autoFocus placeholder="Search by name, generic name or barcode…" value={searchInput} onChange={(e) => setSearchInput(e.target.value)} className="pl-8" />
+          <Input autoFocus placeholder="Search by name, brand, generic name or barcode…" value={searchInput} onChange={(e) => setSearchInput(e.target.value)} className="pl-8" />
         </div>
         <select aria-label="Type" value={kind} onChange={(e) => { setKind(e.target.value); setPage(0); }} className={`${selectClass} sm:w-40`}>
           <option value="">All types</option>
@@ -292,14 +361,13 @@ function PickerBody({ pharmacyId, initialSearch, onClose }: { pharmacyId: string
             </thead>
             <tbody className="divide-y">
               {items.map((item) => (
-                <tr key={item.id} className={item.alreadyAdded ? "opacity-60" : "hover:bg-muted/40"}>
+                <tr key={item.id} className="hover:bg-muted/40">
                   <td className="py-2">
                     <input
                       type="checkbox"
                       aria-label={`Select ${item.name}`}
                       className="h-4 w-4"
                       checked={!!selected[item.id]}
-                      disabled={!!item.alreadyAdded}
                       onChange={() => toggle(item)}
                     />
                   </td>
@@ -311,18 +379,16 @@ function PickerBody({ pharmacyId, initialSearch, onClose }: { pharmacyId: string
                           {[item.manufacturer, item.barcode].filter(Boolean).join(" · ")}
                         </span>
                       )}
+                      {item.alreadyAdded && item.addedAs && (
+                        <span className="block text-xs text-muted-foreground">You have: {item.addedAs}</span>
+                      )}
                     </label>
                   </td>
                   <td className="py-2 pr-3 text-muted-foreground">{item.category ?? item.kind}</td>
                   <td className="py-2 text-right whitespace-nowrap">
-                    {item.alreadyAdded ? (
-                      <Badge variant="secondary">Already added</Badge>
-                    ) : (
-                      <>
-                        {item.requiresPrescription && <Badge variant="outline">Rx</Badge>}{" "}
-                        {!item.verified && <span className="text-xs text-muted-foreground" title="Not yet checked by a pharmacist at Gene Pharmacy">unverified</span>}
-                      </>
-                    )}
+                    {item.alreadyAdded && <Badge variant="secondary" title="You can add it again under another brand">Added</Badge>}{" "}
+                    {item.requiresPrescription && <Badge variant="outline">Rx</Badge>}{" "}
+                    {!item.verified && <span className="text-xs text-muted-foreground" title="Not yet checked by a pharmacist at Gene Pharmacy">unverified</span>}
                   </td>
                 </tr>
               ))}
