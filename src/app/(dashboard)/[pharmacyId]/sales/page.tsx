@@ -20,7 +20,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { formatQuantity, hasPacks, packInfo, packLabel, type PackInfo } from "@/lib/packs";
+import { canSplitPack, formatQuantity, hasPacks, packInfo, packLabel, type PackInfo } from "@/lib/packs";
 import type { DrugResponse, SaleResponse, SaleSummaryResponse, SaleStatus, SalePaymentMethod, CreateSaleRequest } from "@/types";
 
 interface PageProps { params: Promise<{ pharmacyId: string }> }
@@ -462,6 +462,16 @@ export default function SalesPage({ params }: PageProps) {
                             + 1 {packLabel(packInfo(drug))} ({drug.unitsPerPack}) · TZS {fmt(drug.sellingPrice * drug.unitsPerPack)}
                           </button>
                         )}
+                        {canSplitPack(packInfo(drug)) && (
+                          <button
+                            type="button"
+                            disabled={stock.out || (stock.known && stock.quantity < drug.unitsPerPack / 2)}
+                            onClick={(e) => { e.stopPropagation(); addToCart(drug, drug.unitsPerPack / 2); }}
+                            className="mt-1 w-full rounded-md border border-primary/40 py-0.5 text-[10px] font-medium text-primary hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
+                          >
+                            + ½ {packLabel(packInfo(drug))} ({drug.unitsPerPack / 2}) · TZS {fmt(drug.sellingPrice * (drug.unitsPerPack / 2))}
+                          </button>
+                        )}
                         {drug.requiresPrescription && (
                           <div className="flex items-center gap-1 mt-1">
                             <AlertCircle className="h-3 w-3 text-amber-500" />
@@ -563,6 +573,14 @@ export default function SalesPage({ params }: PageProps) {
                             onClick={() => updateQty(item.drugId, item.quantity + item.info.unitsPerPack)}
                           >
                             +{packLabel(item.info)}
+                          </button>
+                        )}
+                        {canSplitPack(item.info) && (
+                          <button
+                            className="rounded-md border border-input px-1.5 py-0.5 text-[10px] hover:bg-accent transition-colors whitespace-nowrap"
+                            onClick={() => updateQty(item.drugId, item.quantity + item.info.unitsPerPack / 2)}
+                          >
+                            +½ {packLabel(item.info)}
                           </button>
                         )}
                         {/* Discount */}
