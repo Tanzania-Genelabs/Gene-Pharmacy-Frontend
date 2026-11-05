@@ -15,7 +15,7 @@ import type { CatalogItem, CatalogItemInput, CatalogKind } from "@/types";
 const selectClass =
   "flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring";
 
-const UNITS = ["tablet", "capsule", "syrup", "injection", "cream", "piece", "strip"];
+const UNITS = ["tablet", "capsule", "syrup", "injection", "cream", "piece", "strip", "blister", "sachet", "bottle"];
 
 /** Add a product to the shared catalog, or correct one that is already there. */
 export function CatalogItemDialog({ item, open, onOpenChange }: { item: CatalogItem | null; open: boolean; onOpenChange: (open: boolean) => void }) {
@@ -36,6 +36,7 @@ function ItemForm({ item, onClose }: { item: CatalogItem | null; onClose: () => 
   const qc = useQueryClient();
   const [form, setForm] = useState({
     name: item?.name ?? "",
+    brand: item?.brand ?? "",
     kind: (item?.kind ?? "Medicine") as CatalogKind,
     genericName: item?.genericName ?? "",
     strength: item?.strength ?? "",
@@ -54,6 +55,7 @@ function ItemForm({ item, onClose }: { item: CatalogItem | null; onClose: () => 
       // Emptied optional fields are sent as null so they are cleared.
       const data: CatalogItemInput = {
         name: form.name.trim(),
+        brand: form.brand.trim() || null,
         kind: form.kind,
         genericName: form.genericName.trim() || null,
         strength: form.strength.trim() || null,
@@ -100,6 +102,10 @@ function ItemForm({ item, onClose }: { item: CatalogItem | null; onClose: () => 
           <Label htmlFor="ci-category">Category</Label>
           <Input id="ci-category" placeholder="e.g. Pain Relief" value={form.category} onChange={(e) => set("category", e.target.value)} />
         </div>
+      </div>
+      <div className="space-y-1">
+        <Label htmlFor="ci-brand">Brand</Label>
+        <Input id="ci-brand" placeholder="e.g. Ketoz (one catalog row per brand)" value={form.brand} onChange={(e) => set("brand", e.target.value)} />
       </div>
       <div className="grid grid-cols-3 gap-3">
         <div className="space-y-1">
