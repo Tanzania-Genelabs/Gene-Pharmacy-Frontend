@@ -51,11 +51,15 @@ const UNIT_OPTIONS = [
   { value: "cream", label: "Cream (g)" },
   { value: "piece", label: "Piece" },
   { value: "strip", label: "Strip" },
+  { value: "blister", label: "Blister" },
+  { value: "sachet", label: "Sachet" },
+  { value: "bottle", label: "Bottle" },
 ];
 
 /** Form fields are text so they can be emptied while typing; they are converted on submit. */
 interface DrugForm {
   name: string;
+  brand: string;
   genericName: string;
   barcode: string;
   categoryId: string;
@@ -69,13 +73,14 @@ interface DrugForm {
 }
 
 const emptyForm = (): DrugForm => ({
-  name: "", genericName: "", barcode: "", categoryId: "", unit: "tablet",
+  name: "", brand: "", genericName: "", barcode: "", categoryId: "", unit: "tablet",
   unitsPerPack: "1", packUnit: "",
   sellingPrice: "", buyingPrice: "", reorderLevel: "10", requiresPrescription: false,
 });
 
 const formFromDrug = (drug: DrugResponse): DrugForm => ({
   name: drug.name,
+  brand: drug.brand ?? "",
   genericName: drug.genericName ?? "",
   barcode: drug.barcode ?? "",
   categoryId: drug.categoryId ?? "",
@@ -208,6 +213,7 @@ export default function DrugsPage({ params }: PageProps) {
       saveMutation.mutate({
         update: {
           ...common,
+          brand: form.brand.trim() || null,
           genericName: form.genericName.trim() || null,
           barcode: form.barcode.trim() || null,
           categoryId: form.categoryId || null,
@@ -219,6 +225,7 @@ export default function DrugsPage({ params }: PageProps) {
       saveMutation.mutate({
         create: {
           ...common,
+          brand: form.brand.trim() || undefined,
           genericName: form.genericName.trim() || undefined,
           barcode: form.barcode.trim() || undefined,
           categoryId: form.categoryId || undefined,
@@ -312,6 +319,11 @@ export default function DrugsPage({ params }: PageProps) {
               <Label htmlFor="d-name">Drug Name *</Label>
               <Input id="d-name" placeholder="e.g. Paracetamol 500mg" value={form.name}
                 onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="d-brand">Brand</Label>
+              <Input id="d-brand" placeholder="e.g. Panadol (the same medicine can be stocked under several brands)" value={form.brand}
+                onChange={(e) => setForm((f) => ({ ...f, brand: e.target.value }))} />
             </div>
             <div className="space-y-1">
               <Label htmlFor="d-generic">Generic Name</Label>
@@ -430,15 +442,17 @@ export default function DrugsPage({ params }: PageProps) {
 
       <Card>
         <CardContent className="p-0">
-          <Table>
+          {/* Fixed column widths and wrapping text: a long drug name grows the row downwards instead of
+              widening the table and pushing the actions menu out of sight. */}
+          <Table className="table-fixed min-w-[820px]">
             <TableHeader>
               <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Generic Name</TableHead>
-                <TableHead>Category</TableHead>
-                <TableHead>Unit Price</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead className="w-12" />
+                <TableHead className="w-[32%]">Name</TableHead>
+                <TableHead className="w-[20%]">Generic Name</TableHead>
+                <TableHead className="w-[13%]">Category</TableHead>
+                <TableHead className="w-[17%]">Unit Price</TableHead>
+                <TableHead className="w-[10%]">Status</TableHead>
+                <TableHead className="w-14 sticky right-0 bg-card" />
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -462,10 +476,15 @@ export default function DrugsPage({ params }: PageProps) {
               ) : (
                 data?.content.map((drug) => (
                   <TableRow key={drug.id} className="hover:bg-accent/50">
-                    <TableCell className="font-medium">{drug.name}</TableCell>
-                    <TableCell className="text-muted-foreground">{drug.genericName}</TableCell>
-                    <TableCell>{drug.categoryName ?? "—"}</TableCell>
-                    <TableCell className="tabular-nums">
+                    <TableCell className="font-medium whitespace-normal break-words align-top" title={drug.name}>
+                      {drug.name}
+                      {drug.brand && !drug.name.toLowerCase().startsWith(drug.brand.toLowerCase()) && (
+                        <span className="block text-xs font-normal text-muted-foreground">Brand: {drug.brand}</span>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground whitespace-normal break-words align-top">{drug.genericName}</TableCell>
+                    <TableCell className="whitespace-normal break-words align-top">{drug.categoryName ?? "—"}</TableCell>
+                    <TableCell className="tabular-nums whitespace-normal align-top">
                       TZS {drug.sellingPrice.toLocaleString()}
                       <span className="text-xs text-muted-foreground"> / {drug.unit}</span>
                       {drug.unitsPerPack > 1 && (
@@ -474,12 +493,13 @@ export default function DrugsPage({ params }: PageProps) {
                         </div>
                       )}
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="align-top">
                       <Badge variant={drug.active ? "default" : "secondary"}>
                         {drug.active ? "Active" : "Inactive"}
                       </Badge>
                     </TableCell>
-                    <TableCell>
+                    {/* Always visible: pinned to the right edge even when the table scrolls sideways. */}
+                    <TableCell className="sticky right-0 bg-card align-top shadow-[-8px_0_8px_-8px_rgba(0,0,0,0.15)]">
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
                           <Button variant="ghost" size="icon" className="h-8 w-8">
