@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Input } from "@/components/ui/input";
-import { formatQuantity, hasPacks, packLabel, type PackInfo } from "@/lib/packs";
+import { canSplitPack, formatQuantity, hasPacks, packLabel, type PackInfo } from "@/lib/packs";
 
 interface Props {
   id?: string;
@@ -15,14 +15,16 @@ interface Props {
 }
 
 /**
- * Lets staff type a quantity either in single units (6 tablets) or whole packs (2 boxes);
- * the parent always receives single units. Give it `key={drugId}` so it resets per drug.
+ * Lets staff type a quantity either in single units (6 tablets) or in packs (2 boxes, or 1.5 when half a
+ * pack makes a whole number of units); the parent always receives single units. Give it `key={drugId}`
+ * so it resets per drug.
  */
 export function PackQuantityField({ id, value, onChange, info, allowNegative = false, placeholder }: Props) {
   const packed = hasPacks(info);
   const [mode, setMode] = useState<"units" | "packs">("units");
   const [raw, setRaw] = useState(value ? String(value) : "");
   const multiplier = mode === "packs" && packed ? info.unitsPerPack : 1;
+  const halves = mode === "packs" && canSplitPack(info);
 
   // The parent clearing the field (after a save) should clear what is typed.
   useEffect(() => {
@@ -36,7 +38,13 @@ export function PackQuantityField({ id, value, onChange, info, allowNegative = f
     setRaw(nextRaw);
     const m = nextMode === "packs" && packed ? info.unitsPerPack : 1;
     const parsed = Number(nextRaw);
-    onChange(Number.isFinite(parsed) ? Math.trunc(parsed) * m : 0);
+    if (!Number.isFinite(parsed)) {
+      onChange(0);
+      return;
+    }
+    // Whole packs, or halves when the pack splits evenly; otherwise a fraction of a unit can't exist, so drop it.
+    const packs = nextMode === "packs" && canSplitPack(info) ? Math.trunc(parsed * 2) / 2 : Math.trunc(parsed);
+    onChange(packs * m);
   }
 
   return (
@@ -45,8 +53,8 @@ export function PackQuantityField({ id, value, onChange, info, allowNegative = f
         <Input
           id={id}
           type="number"
-          step={1}
-          min={allowNegative ? undefined : 1}
+          step={halves ? 0.5 : 1}
+          min={allowNegative ? undefined : halves ? 0.5 : 1}
           placeholder={placeholder}
           value={raw}
           onChange={(e) => update(e.target.value)}
