@@ -22,6 +22,11 @@ export function hasPacks(info: PackInfo): boolean {
   return info.unitsPerPack > 1;
 }
 
+/** A pack can be halved only when half of it is a whole number of units (a strip of 10 yes, of 15 no). */
+export function canSplitPack(info: PackInfo): boolean {
+  return info.unitsPerPack > 1 && info.unitsPerPack % 2 === 0;
+}
+
 export function packLabel(info: PackInfo): string {
   return info.packUnit || "pack";
 }
