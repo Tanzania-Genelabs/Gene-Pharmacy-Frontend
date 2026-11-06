@@ -18,6 +18,8 @@ function normalizeDrug(drug: DrugResponse): DrugResponse {
   return {
     ...drug,
     sellingPrice: Number(drug.sellingPrice),
+    allowsHalfDose: Boolean(drug.allowsHalfDose),
+    halfDosePrice: drug.halfDosePrice === null || drug.halfDosePrice === undefined ? null : Number(drug.halfDosePrice),
     buyingPrice: drug.buyingPrice === null || drug.buyingPrice === undefined ? null : Number(drug.buyingPrice),
   };
 }
