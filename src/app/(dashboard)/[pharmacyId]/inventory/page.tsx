@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useState } from "react";
+import { use, useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { inventoryApi } from "@/api/inventory.api";
 import { drugApi } from "@/api/drug.api";
@@ -28,6 +28,7 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
+import { DrugPicker } from "@/components/inventory/drug-picker";
 import { PackQuantityField } from "@/components/inventory/pack-quantity-field";
 import { formatQuantity, packInfo } from "@/lib/packs";
 import type { StockAdjustmentRequest, StockTransferRequest } from "@/types";
@@ -52,9 +53,17 @@ export default function InventoryPage({ params }: PageProps) {
     notes: "",
   });
 
+  // The search runs on the server so it covers every drug, not just the 20 on this page.
+  const [stockSearch, setStockSearch] = useState("");
+  const [stockTerm, setStockTerm] = useState("");
+  useEffect(() => {
+    const timer = setTimeout(() => { setStockTerm(stockSearch.trim()); setPage(0); }, 300);
+    return () => clearTimeout(timer);
+  }, [stockSearch]);
+
   const { data: stockList, isLoading } = useQuery({
-    queryKey: ["inventory", pharmacyId, page],
-    queryFn: () => inventoryApi.list(pharmacyId, { page, size: 20 }),
+    queryKey: ["inventory", pharmacyId, page, stockTerm],
+    queryFn: () => inventoryApi.list(pharmacyId, { page, size: 20, search: stockTerm || undefined }),
     placeholderData: (prev) => prev,
   });
 
@@ -178,17 +187,12 @@ export default function InventoryPage({ params }: PageProps) {
           <form onSubmit={handleAdjustSubmit} className="space-y-4 px-6 py-4">
             <div className="space-y-1">
               <Label htmlFor="adj-drug">Drug *</Label>
-              <select
+              <DrugPicker
                 id="adj-drug"
-                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
+                drugs={drugs?.content}
                 value={adjustForm.drugId}
-                onChange={(e) => setAdjustForm((f) => ({ ...f, drugId: e.target.value }))}
-              >
-                <option value="">Select drug…</option>
-                {drugs?.content?.map((d) => (
-                  <option key={d.id} value={d.id}>{d.name}</option>
-                ))}
-              </select>
+                onChange={(drugId) => setAdjustForm((f) => ({ ...f, drugId }))}
+              />
             </div>
 
             <div className="space-y-1">
@@ -302,17 +306,12 @@ export default function InventoryPage({ params }: PageProps) {
           <form onSubmit={handleTransferSubmit} className="space-y-4 px-6 py-4">
             <div className="space-y-1">
               <Label htmlFor="tr-drug">Drug *</Label>
-              <select
+              <DrugPicker
                 id="tr-drug"
-                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
+                drugs={drugs?.content}
                 value={transferForm.drugId}
-                onChange={(e) => setTransferForm((f) => ({ ...f, drugId: e.target.value }))}
-              >
-                <option value="">Select drug…</option>
-                {drugs?.content?.map((d) => (
-                  <option key={d.id} value={d.id}>{d.name}</option>
-                ))}
-              </select>
+                onChange={(drugId) => setTransferForm((f) => ({ ...f, drugId }))}
+              />
             </div>
 
             <div className="space-y-1">
@@ -411,7 +410,16 @@ export default function InventoryPage({ params }: PageProps) {
           <TabsTrigger value="movements">Stock Movements</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="stock" className="mt-4">
+        <TabsContent value="stock" className="mt-4 space-y-3">
+          <div className="relative max-w-sm">
+            <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder="Search stock by name, brand or barcode…"
+              className="pl-8"
+              value={stockSearch}
+              onChange={(e) => setStockSearch(e.target.value)}
+            />
+          </div>
           <Card>
             <CardContent className="p-0">
               <Table>
@@ -439,7 +447,7 @@ export default function InventoryPage({ params }: PageProps) {
                   ) : stockList?.content.length === 0 ? (
                     <TableRow>
                       <TableCell colSpan={6} className="text-center text-muted-foreground py-12">
-                        No stock records found
+                        {stockTerm ? `No stock matches “${stockTerm}”` : "No stock records found"}
                       </TableCell>
                     </TableRow>
                   ) : (
