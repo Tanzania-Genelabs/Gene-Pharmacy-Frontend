@@ -61,12 +61,15 @@ export default function ShiftsPage({ params }: PageProps) {
   // Queries
   const { data, isLoading } = useQuery({
     queryKey: ["shifts", pharmacyId, page, user?.branchId],
-    queryFn: () =>
-      shiftApi.list(pharmacyId, {
-        page,
-        size: 20,
-        ...(isSeller && user?.branchId ? { branchId: user.branchId } : {}),
-      }),
+    queryFn: async () => {
+      if (isSeller) {
+        // A seller sees the open shift of their own branch; the history of past shifts is for managers and owners.
+        const open = user?.branchId ? await shiftApi.getActive(pharmacyId, user.branchId).catch(() => null) : null;
+        const content = open ? [open] : [];
+        return { content, totalElements: content.length, totalPages: 1, size: 20, number: 0, first: true, last: true };
+      }
+      return shiftApi.list(pharmacyId, { page, size: 20 });
+    },
     placeholderData: (prev) => prev,
   });
 
