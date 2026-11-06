@@ -265,7 +265,7 @@ export const adminSupportApi = {
 
   /** The running session for this pharmacy, or null. */
   active: (pharmacyId: string) =>
-    api.get<SupportSession | null>("/api/v1/admin/support-sessions/active", { params: { pharmacyId } }).then((r) => r.data),
+    api.get<SupportSession | null>("/api/v1/admin/support-sessions/active", { params: { pharmacyId } }).then((r) => (r.data && r.data.id ? r.data : null)),
 
   end: (sessionId: string) => api.post<SupportSession>(`/api/v1/admin/support-sessions/${sessionId}/end`).then((r) => r.data),
 
