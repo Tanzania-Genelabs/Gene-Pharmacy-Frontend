@@ -10,7 +10,7 @@ import type {
 } from "@/types";
 
 export const inventoryApi = {
-  list: (pharmacyId: string, params?: { page?: number; size?: number; branchId?: string }) =>
+  list: (pharmacyId: string, params?: { page?: number; size?: number; branchId?: string; search?: string }) =>
     api.get<Page<StockResponse>>(`/api/v1/pharmacies/${pharmacyId}/inventory`, { params }).then((r) => r.data),
 
   lowStock: (pharmacyId: string, params?: { branchId?: string }) =>
