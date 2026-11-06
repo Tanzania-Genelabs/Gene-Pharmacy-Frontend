@@ -28,6 +28,8 @@ interface PageProps { params: Promise<{ pharmacyId: string }> }
 interface CartItem {
   drugId: string; drugName: string;
   unitPrice: number; quantity: number; discountPct: number;
+  /** Sold by the half dose: quantity counts halves and unitPrice is the half-dose price. */
+  halfDose: boolean;
   /** Quantity and unitPrice are per single unit (e.g. tablet); info lets the till also sell whole packs. */
   info: PackInfo;
 }
@@ -36,6 +38,11 @@ const PAYMENT_METHODS: SalePaymentMethod[] = ["Cash", "Card", "MobileMoney", "In
 const STATUS_VARIANT: Record<SaleStatus, "default" | "secondary" | "destructive" | "outline"> = {
   Completed: "default", Voided: "destructive", Pending: "secondary",
 };
+
+/** A drug can be in the cart twice: whole units and half doses. */
+const cartKey = (drugId: string, halfDose: boolean) => `${drugId}:${halfDose ? "half" : "whole"}`;
+/** How much stock a cart line takes, in whole units. */
+const stockUnitsOf = (i: Pick<CartItem, "quantity" | "halfDose">) => (i.halfDose ? i.quantity / 2 : i.quantity);
 
 function fmt(n: number) { return n.toLocaleString("en-TZ"); }
 function fmtDate(s: string) {
@@ -76,7 +83,7 @@ function ReceiptContent({ sale, drugNames }: { sale: SaleResponse; drugNames?: R
         <tbody>
           {sale.items.map((item, i) => (
             <tr key={i}>
-              <td className="py-0.5 pr-1">{drugNames?.[item.drugId] ?? item.drugId.slice(0, 8) + "…"}</td>
+              <td className="py-0.5 pr-1">{drugNames?.[item.drugId] ?? item.drugId.slice(0, 8) + "…"}{item.isHalfDose ? " (½ dose)" : ""}</td>
               <td className="text-center py-0.5">{item.quantity}</td>
               <td className="text-right py-0.5">{fmt(item.unitPrice)}</td>
               <td className="text-right py-0.5 font-medium">{fmt(item.lineTotal)}</td>
@@ -207,36 +214,52 @@ export default function SalesPage({ params }: PageProps) {
     return { known, quantity, out: known && quantity <= 0, low: known && quantity > 0 && quantity <= reorderLevel };
   }, [stockByDrug, stockLoading, branchId]);
 
-  /** `units` is in single units; pass the pack size to add a whole pack. */
-  const addToCart = useCallback((drug: DrugResponse, units = 1) => {
+  /** Stock the drug's cart lines take, optionally leaving out one line. */
+  const stockUsedBy = useCallback(
+    (drugId: string, exceptKey?: string) =>
+      cart.filter((i) => i.drugId === drugId && cartKey(i.drugId, i.halfDose) !== exceptKey).reduce((s, i) => s + stockUnitsOf(i), 0),
+    [cart],
+  );
+
+  /** `units` is in single units (halves when halfDose); pass the pack size to add a whole pack. */
+  const addToCart = useCallback((drug: DrugResponse, units = 1, halfDose = false) => {
     if (!branchId) { toast.error("Select a branch first"); return; }
+    if (halfDose && drug.halfDosePrice == null) { toast.error(`${drug.name} is not sold by the half dose`); return; }
     const stock = stockOf(drug);
-    const inCartNow = cart.find((i) => i.drugId === drug.id)?.quantity ?? 0;
+    const key = cartKey(drug.id, halfDose);
+    const inCartNow = cart.find((i) => cartKey(i.drugId, i.halfDose) === key)?.quantity ?? 0;
     if (stock.out) { toast.error(`${drug.name} is out of stock at this branch`); return; }
-    if (stock.known && inCartNow + units > stock.quantity) {
+    const needed = stockUsedBy(drug.id, key) + stockUnitsOf({ quantity: inCartNow + units, halfDose });
+    if (stock.known && needed > stock.quantity) {
       toast.warning(`Only ${stock.quantity} ${drug.unit}${stock.quantity === 1 ? "" : "s"} of ${drug.name} in stock`);
       return;
     }
     setCart((prev) => {
-      const idx = prev.findIndex((i) => i.drugId === drug.id);
+      const idx = prev.findIndex((i) => cartKey(i.drugId, i.halfDose) === key);
       if (idx >= 0) { const n = [...prev]; n[idx] = { ...n[idx], quantity: n[idx].quantity + units }; return n; }
-      return [...prev, { drugId: drug.id, drugName: drug.name, unitPrice: drug.sellingPrice, quantity: units, discountPct: 0, info: packInfo(drug) }];
+      return [...prev, { drugId: drug.id, drugName: drug.name, unitPrice: halfDose ? (drug.halfDosePrice as number) : drug.sellingPrice, quantity: units, discountPct: 0, halfDose, info: packInfo(drug) }];
     });
-  }, [branchId, cart, stockOf]);
+  }, [branchId, cart, stockOf, stockUsedBy]);
 
-  function updateQty(drugId: string, qty: number) {
-    if (qty <= 0) { setCart((p) => p.filter((i) => i.drugId !== drugId)); return; }
-    const row = stockByDrug.get(drugId);
-    if (!stockLoading && branchId && qty > Math.max(0, row?.quantity ?? 0)) {
-      const max = Math.max(0, row?.quantity ?? 0);
-      toast.warning(`Only ${max} in stock`);
-      qty = max;
-      if (qty <= 0) { setCart((p) => p.filter((i) => i.drugId !== drugId)); return; }
+  function updateQty(key: string, qty: number) {
+    const line = cart.find((i) => cartKey(i.drugId, i.halfDose) === key);
+    if (!line) return;
+    if (qty <= 0) { setCart((p) => p.filter((i) => cartKey(i.drugId, i.halfDose) !== key)); return; }
+    const row = stockByDrug.get(line.drugId);
+    if (!stockLoading && branchId) {
+      // The most this line can have is what is left after the drug's other line, counted in this line's doses.
+      const room = Math.max(0, (row?.quantity ?? 0) - stockUsedBy(line.drugId, key));
+      const max = Math.floor(line.halfDose ? room * 2 : room);
+      if (qty > max) {
+        toast.warning(`Only ${max} in stock`);
+        qty = max;
+        if (qty <= 0) { setCart((p) => p.filter((i) => cartKey(i.drugId, i.halfDose) !== key)); return; }
+      }
     }
-    setCart((p) => p.map((i) => i.drugId === drugId ? { ...i, quantity: qty } : i));
+    setCart((p) => p.map((i) => cartKey(i.drugId, i.halfDose) === key ? { ...i, quantity: qty } : i));
   }
-  function updateDiscountPct(drugId: string, pct: number) {
-    setCart((p) => p.map((i) => i.drugId === drugId ? { ...i, discountPct: Math.min(100, Math.max(0, pct)) } : i));
+  function updateDiscountPct(key: string, pct: number) {
+    setCart((p) => p.map((i) => cartKey(i.drugId, i.halfDose) === key ? { ...i, discountPct: Math.min(100, Math.max(0, pct)) } : i));
   }
 
   const completeSaleMutation = useMutation({
@@ -300,6 +323,7 @@ export default function SalesPage({ params }: PageProps) {
       items: cart.map((i) => ({
         drugId: i.drugId,
         quantity: i.quantity,
+        ...(i.halfDose ? { isHalfDose: true } : {}),
         unitPrice: i.unitPrice,
         // Convert percentage discount to fixed monetary amount
         discountAmount: Math.round((i.unitPrice * i.quantity * i.discountPct) / 100),
@@ -420,7 +444,8 @@ export default function SalesPage({ params }: PageProps) {
               ) : (
                 <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3 mt-2">
                   {drugs.map((drug) => {
-                    const inCart = cart.find((i) => i.drugId === drug.id);
+                    const inCartLines = cart.filter((i) => i.drugId === drug.id);
+                    const inCart = inCartLines.length ? { quantity: inCartLines.reduce((s, i) => s + i.quantity, 0) } : undefined;
                     const stock = stockOf(drug);
                     return (
                       <div
@@ -452,6 +477,16 @@ export default function SalesPage({ params }: PageProps) {
                         <p className="text-[10px] text-muted-foreground">per {drug.unit}</p>
                         {stock.out && <Badge variant="destructive" className="mt-1.5">Out of stock</Badge>}
                         {stock.low && <Badge className="mt-1.5 border-transparent bg-amber-500 text-white hover:bg-amber-500">Low · {stock.quantity} left</Badge>}
+                        {drug.halfDosePrice != null && (
+                          <button
+                            type="button"
+                            disabled={stock.out || (stock.known && stock.quantity < 0.5)}
+                            onClick={(e) => { e.stopPropagation(); addToCart(drug, 1, true); }}
+                            className="mt-1.5 w-full rounded-md border border-amber-500/60 py-0.5 text-[10px] font-medium text-amber-700 hover:bg-amber-500/10 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent dark:text-amber-400"
+                          >
+                            + ½ dose · TZS {fmt(drug.halfDosePrice)}
+                          </button>
+                        )}
                         {hasPacks(packInfo(drug)) && (
                           <button
                             type="button"
@@ -534,51 +569,55 @@ export default function SalesPage({ params }: PageProps) {
               ) : (
                 cart.map((item) => {
                   const lineTotal = Math.round(item.unitPrice * item.quantity * (1 - item.discountPct / 100));
+                  const key = cartKey(item.drugId, item.halfDose);
                   return (
-                    <div key={item.drugId} className="rounded-lg border border-border bg-card p-2.5 space-y-2">
+                    <div key={key} className="rounded-lg border border-border bg-card p-2.5 space-y-2">
                       <div className="flex items-start justify-between gap-1">
                         <div className="flex-1">
-                          <p className="text-xs font-semibold leading-tight">{item.drugName}</p>
-                          {hasPacks(item.info) && (
+                          <p className="text-xs font-semibold leading-tight">
+                            {item.drugName}
+                            {item.halfDose && <Badge variant="secondary" className="ml-1 align-middle text-[9px]">½ dose</Badge>}
+                          </p>
+                          {!item.halfDose && hasPacks(item.info) && (
                             <p className="text-[10px] text-muted-foreground">{formatQuantity(item.quantity, item.info)}</p>
                           )}
                         </div>
-                        <button onClick={() => setCart((p) => p.filter((i) => i.drugId !== item.drugId))} className="text-muted-foreground hover:text-destructive transition-colors">
+                        <button onClick={() => setCart((p) => p.filter((i) => cartKey(i.drugId, i.halfDose) !== key))} className="text-muted-foreground hover:text-destructive transition-colors">
                           <X className="h-3.5 w-3.5" />
                         </button>
                       </div>
                       <div className="flex items-center gap-2">
                         {/* Qty stepper */}
                         <div className="flex items-center border border-input rounded-md overflow-hidden">
-                          <button className="px-1.5 py-0.5 hover:bg-accent transition-colors" onClick={() => updateQty(item.drugId, item.quantity - 1)}>
+                          <button className="px-1.5 py-0.5 hover:bg-accent transition-colors" onClick={() => updateQty(key, item.quantity - 1)}>
                             <Minus className="h-3 w-3" />
                           </button>
                           <input
                             type="number" min={1}
                             className="w-10 text-center text-xs bg-transparent border-x border-input py-0.5 focus:outline-none"
                             value={item.quantity}
-                            onChange={(e) => updateQty(item.drugId, Number(e.target.value))}
+                            onChange={(e) => updateQty(key, Number(e.target.value))}
                           />
                           <button
                             className="px-1.5 py-0.5 hover:bg-accent transition-colors disabled:cursor-not-allowed disabled:opacity-40"
-                            disabled={!stockLoading && !!branchId && item.quantity >= Math.max(0, stockByDrug.get(item.drugId)?.quantity ?? 0)}
-                            onClick={() => updateQty(item.drugId, item.quantity + 1)}
+                            disabled={!stockLoading && !!branchId && stockUsedBy(item.drugId) + (item.halfDose ? 0.5 : 1) > Math.max(0, stockByDrug.get(item.drugId)?.quantity ?? 0)}
+                            onClick={() => updateQty(key, item.quantity + 1)}
                           >
                             <Plus className="h-3 w-3" />
                           </button>
                         </div>
-                        {hasPacks(item.info) && (
+                        {!item.halfDose && hasPacks(item.info) && (
                           <button
                             className="rounded-md border border-input px-1.5 py-0.5 text-[10px] hover:bg-accent transition-colors whitespace-nowrap"
-                            onClick={() => updateQty(item.drugId, item.quantity + item.info.unitsPerPack)}
+                            onClick={() => updateQty(key, item.quantity + item.info.unitsPerPack)}
                           >
                             +{packLabel(item.info)}
                           </button>
                         )}
-                        {canSplitPack(item.info) && (
+                        {!item.halfDose && canSplitPack(item.info) && (
                           <button
                             className="rounded-md border border-input px-1.5 py-0.5 text-[10px] hover:bg-accent transition-colors whitespace-nowrap"
-                            onClick={() => updateQty(item.drugId, item.quantity + item.info.unitsPerPack / 2)}
+                            onClick={() => updateQty(key, item.quantity + item.info.unitsPerPack / 2)}
                           >
                             +½ {packLabel(item.info)}
                           </button>
@@ -590,13 +629,13 @@ export default function SalesPage({ params }: PageProps) {
                             type="number" min={0} max={100}
                             className="w-12 h-6 border border-input rounded text-xs text-center bg-transparent focus:outline-none focus:ring-1 focus:ring-ring"
                             value={item.discountPct}
-                            onChange={(e) => updateDiscountPct(item.drugId, Number(e.target.value))}
+                            onChange={(e) => updateDiscountPct(key, Number(e.target.value))}
                           />
                         </div>
                         <p className="text-xs font-bold text-primary ml-auto whitespace-nowrap">TZS {fmt(lineTotal)}</p>
                       </div>
                       <p className="text-[10px] text-muted-foreground">
-                        {fmt(item.unitPrice)} × {item.quantity} {item.info.unit}{item.discountPct > 0 ? ` − ${item.discountPct}% disc` : ""}
+                        {fmt(item.unitPrice)} × {item.quantity} {item.halfDose ? "½ dose" : item.info.unit}{item.discountPct > 0 ? ` − ${item.discountPct}% disc` : ""}
                       </p>
                     </div>
                   );
