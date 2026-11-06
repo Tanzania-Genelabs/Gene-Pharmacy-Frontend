@@ -157,6 +157,43 @@ export const adminSystemApi = {
   status: () => api.get<SystemStatus>("/api/v1/admin/system").then((r) => r.data),
 };
 
+export interface BackupFile {
+  name: string;
+  sizeBytes: number;
+  createdAt: string;
+  onServer: boolean;
+  offServer: boolean;
+  status: string | null;
+}
+
+export interface BackupList {
+  backups: BackupFile[];
+  twoFactorEnabled: boolean;
+  offServerConfigured: boolean;
+}
+
+export const adminBackupApi = {
+  list: () => api.get<BackupList>("/api/v1/admin/backups").then((r) => r.data),
+
+  /**
+   * Re-checks the password and a fresh two-factor code on the server, then returns the file itself in the
+   * response (no link is ever made). The checksum comes back so the copy can be verified after it is saved.
+   */
+  download: async (file: string, body: { password: string; code: string; reason: string }) => {
+    try {
+      const r = await api.post<Blob>(`/api/v1/admin/backups/${encodeURIComponent(file)}/download`, body, { responseType: "blob" });
+      return { blob: r.data, sha256: (r.headers["x-checksum-sha256"] as string | undefined) ?? null };
+    } catch (err) {
+      // An error body arrives as a Blob here; turn it back into the usual JSON so the message can be shown.
+      const res = (err as { response?: { data?: unknown } }).response;
+      if (res?.data instanceof Blob) {
+        try { res.data = JSON.parse(await res.data.text()); } catch { /* keep the blob */ }
+      }
+      throw err;
+    }
+  },
+};
+
 export const adminSettingsApi = {
   get: () => api.get<AdminPlatformSettings>("/api/v1/admin/settings").then((r) => r.data),
   setApprovalMode: (mode: AdminPlatformSettings["pharmacyApprovalMode"]) =>
