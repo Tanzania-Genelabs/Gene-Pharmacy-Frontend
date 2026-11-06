@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { CheckCircle2, Download, HardDrive, Loader2, ShieldAlert } from "lucide-react";
 import { adminBackupApi, type BackupFile } from "@/api/admin.api";
@@ -16,9 +16,16 @@ import { Label } from "@/components/ui/label";
 
 const size = (bytes: number) => (bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`);
 
+const PAGE_SIZE = 10;
+
 /** Every database backup, and a guarded way to download one in an emergency. */
 export function BackupsCard() {
-  const list = useQuery({ queryKey: ["admin", "backups"], queryFn: () => adminBackupApi.list() });
+  const [page, setPage] = useState(0);
+  const list = useQuery({
+    queryKey: ["admin", "backups", page],
+    queryFn: () => adminBackupApi.list({ page, size: PAGE_SIZE }),
+    placeholderData: keepPreviousData,
+  });
   const [target, setTarget] = useState<BackupFile | null>(null);
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
@@ -120,6 +127,21 @@ export function BackupsCard() {
               </li>
             ))}
           </ul>
+        )}
+        {list.data && list.data.totalPages > 1 && (
+          <div className="flex items-center justify-between pt-1">
+            <p className="text-xs text-muted-foreground">
+              Page {list.data.page + 1} of {list.data.totalPages} · {list.data.totalElements} backups
+            </p>
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" disabled={list.data.first || list.isFetching} onClick={() => setPage(list.data.page - 1)}>
+                Previous
+              </Button>
+              <Button variant="outline" size="sm" disabled={list.data.last || list.isFetching} onClick={() => setPage(list.data.page + 1)}>
+                Next
+              </Button>
+            </div>
+          </div>
         )}
       </CardContent>
 
