@@ -1590,3 +1590,23 @@ export interface AdminPlatformSettings {
   updatedBy: string | null;
   updatedAt: string | null;
 }
+
+export interface CashFlowDay {
+  date: string;
+  moneyIn: { cash: string; mobileMoney: string; card: string; other: string; total: string };
+  /** Sold on credit or insurance: income, but the money has not arrived yet. */
+  onAccount: string;
+  /** Null when the plan does not include expense management. */
+  moneyOut: { cash: string; mobileMoney: string; bank: string; other: string; total: string } | null;
+  net: string | null;
+  /** Cash sales less expenses paid in cash: what the drawer gained or lost. */
+  netCash: string | null;
+}
+
+export interface CashFlowReport {
+  from: string;
+  to: string;
+  expensesIncluded: boolean;
+  totals: Omit<CashFlowDay, "date">;
+  days: CashFlowDay[];
+}
