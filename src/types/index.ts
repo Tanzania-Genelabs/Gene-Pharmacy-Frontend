@@ -244,6 +244,9 @@ export interface DrugResponse {
   packUnit: string | null;
   /** Whole or decimal TZS. The API client converts the server's decimal strings to numbers. */
   sellingPrice: number;
+  /** True when the drug can also be sold by the half dose, at halfDosePrice. A half dose takes 0.5 of a unit of stock. */
+  allowsHalfDose: boolean;
+  halfDosePrice: number | null;
   buyingPrice: number | null;
   reorderLevel: number;
   requiresPrescription: boolean;
@@ -265,6 +268,9 @@ export interface CreateDrugRequest {
   unitsPerPack?: number;
   packUnit?: string;
   sellingPrice: number;
+  /** Left out, the half-dose price is half of the selling price. */
+  allowsHalfDose?: boolean;
+  halfDosePrice?: number | null;
   buyingPrice: number;
   reorderLevel: number;
   requiresPrescription: boolean;
@@ -284,6 +290,8 @@ export interface UpdateDrugRequest {
   unitsPerPack?: number;
   packUnit?: string | null;
   sellingPrice?: number;
+  allowsHalfDose?: boolean;
+  halfDosePrice?: number | null;
   buyingPrice?: number | null;
   reorderLevel?: number;
   requiresPrescription?: boolean;
@@ -482,7 +490,10 @@ export type SalePaymentMethod = "Cash" | "Card" | "MobileMoney" | "Insurance" | 
 
 export interface SaleItemRequest {
   drugId: string;
+  /** Whole units, or halves when isHalfDose is set. */
   quantity: number;
+  /** Sold by the half dose: unitPrice is the drug's half-dose price and the line takes 0.5 unit of stock per item. */
+  isHalfDose?: boolean;
   unitPrice: number;
   /** Fixed monetary discount amount for this line (not a percentage) */
   discountAmount: number;
@@ -507,6 +518,7 @@ export interface SaleItemResponse {
   id: string;
   drugId: string;
   quantity: number;
+  isHalfDose?: boolean;
   unitPrice: number;
   discountAmount: number;
   lineTotal: number;
@@ -1435,6 +1447,8 @@ export interface BarcodeLookupResponse {
   unit: string;
   unitSize: string | null;
   sellingPrice: number;
+  allowsHalfDose?: boolean;
+  halfDosePrice?: number | null;
   stockAvailable: number;
   requiresPrescription: boolean;
 }
