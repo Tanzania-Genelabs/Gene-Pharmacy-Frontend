@@ -123,6 +123,18 @@
   body {
     @apply bg-background text-foreground;
   }
+  /* The browser draws a native <select> list itself; without this its options are white on white in dark mode. */
+  select {
+    color-scheme: light;
+  }
+  .dark select {
+    color-scheme: dark;
+  }
+  select option,
+  select optgroup {
+    background-color: var(--popover);
+    color: var(--popover-foreground);
+  }
 }
 /* ── Setup guide ─────────────────────────────────────────────────────────── */
 :root {
