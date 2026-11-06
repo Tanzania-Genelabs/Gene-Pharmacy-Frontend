@@ -24,6 +24,7 @@ import {
 } from "recharts";
 import { toast } from "sonner";
 import { ProfitStatement } from "@/components/expenses/profit-statement";
+import { CashFlowTable } from "@/components/expenses/cash-flow-table";
 
 interface PageProps {
   params: Promise<{ pharmacyId: string }>;
@@ -180,6 +181,7 @@ export default function ReportsPage({ params }: PageProps) {
       <Tabs defaultValue="sales">
         <TabsList>
           <TabsTrigger value="sales">Sales Trend</TabsTrigger>
+          <TabsTrigger value="cashflow">Cash Flow</TabsTrigger>
           <TabsTrigger value="drugs">Top Drugs</TabsTrigger>
           <TabsTrigger value="payment">Payment Methods</TabsTrigger>
           <TabsTrigger value="inventory">Inventory</TabsTrigger>
@@ -214,6 +216,10 @@ export default function ReportsPage({ params }: PageProps) {
               )}
             </CardContent>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="cashflow" className="mt-4">
+          <CashFlowTable pharmacyId={pharmacyId} from={from} to={to} />
         </TabsContent>
 
         <TabsContent value="drugs" className="mt-4">
