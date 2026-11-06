@@ -170,10 +170,16 @@ export interface BackupList {
   backups: BackupFile[];
   twoFactorEnabled: boolean;
   offServerConfigured: boolean;
+  page: number;
+  size: number;
+  totalElements: number;
+  totalPages: number;
+  first: boolean;
+  last: boolean;
 }
 
 export const adminBackupApi = {
-  list: () => api.get<BackupList>("/api/v1/admin/backups").then((r) => r.data),
+  list: (params?: { page?: number; size?: number }) => api.get<BackupList>("/api/v1/admin/backups", { params }).then((r) => r.data),
 
   /**
    * Re-checks the password and a fresh two-factor code on the server, then returns the file itself in the
