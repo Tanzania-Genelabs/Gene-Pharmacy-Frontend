@@ -67,6 +67,9 @@ interface DrugForm {
   unitsPerPack: string;
   packUnit: string;
   sellingPrice: string;
+  allowsHalfDose: boolean;
+  /** Empty means half of the selling price; type a higher number to add something on top. */
+  halfDosePrice: string;
   buyingPrice: string;
   reorderLevel: string;
   requiresPrescription: boolean;
@@ -75,7 +78,7 @@ interface DrugForm {
 const emptyForm = (): DrugForm => ({
   name: "", brand: "", genericName: "", barcode: "", categoryId: "", unit: "tablet",
   unitsPerPack: "1", packUnit: "",
-  sellingPrice: "", buyingPrice: "", reorderLevel: "10", requiresPrescription: false,
+  sellingPrice: "", allowsHalfDose: false, halfDosePrice: "", buyingPrice: "", reorderLevel: "10", requiresPrescription: false,
 });
 
 const formFromDrug = (drug: DrugResponse): DrugForm => ({
@@ -88,6 +91,8 @@ const formFromDrug = (drug: DrugResponse): DrugForm => ({
   unitsPerPack: String(drug.unitsPerPack ?? 1),
   packUnit: drug.packUnit ?? "",
   sellingPrice: String(drug.sellingPrice),
+  allowsHalfDose: drug.allowsHalfDose ?? false,
+  halfDosePrice: drug.halfDosePrice == null ? "" : String(drug.halfDosePrice),
   buyingPrice: drug.buyingPrice === null ? "" : String(drug.buyingPrice),
   reorderLevel: String(drug.reorderLevel),
   requiresPrescription: drug.requiresPrescription,
@@ -172,6 +177,7 @@ export default function DrugsPage({ params }: PageProps) {
   const buying = form.buyingPrice.trim() === "" ? null : Number(form.buyingPrice);
   const unitsPerPack = Number(form.unitsPerPack);
   const sellsInPacks = Number.isInteger(unitsPerPack) && unitsPerPack > 1;
+  const halfDosePrice = form.halfDosePrice.trim() === "" ? selling / 2 : Number(form.halfDosePrice);
   const sellsBelowCost = buying !== null && Number.isFinite(selling) && Number.isFinite(buying) && selling < buying;
 
   function handleSubmit(e: React.FormEvent) {
@@ -193,6 +199,10 @@ export default function DrugsPage({ params }: PageProps) {
       toast.error("Units per pack must be a whole number, 1 or more");
       return;
     }
+    if (form.allowsHalfDose && (!Number.isFinite(halfDosePrice) || halfDosePrice <= 0)) {
+      toast.error("Enter a half-dose price above 0, or leave it empty for half of the selling price");
+      return;
+    }
     const reorder = Number(form.reorderLevel);
     if (form.reorderLevel.trim() === "" || !Number.isInteger(reorder) || reorder < 0) {
       toast.error("The reorder level must be a whole number, 0 or more");
@@ -204,6 +214,8 @@ export default function DrugsPage({ params }: PageProps) {
       unit: form.unit,
       unitsPerPack,
       sellingPrice: selling,
+      allowsHalfDose: form.allowsHalfDose,
+      halfDosePrice: form.allowsHalfDose ? halfDosePrice : null,
       reorderLevel: reorder,
       requiresPrescription: form.requiresPrescription,
     };
@@ -395,6 +407,32 @@ export default function DrugsPage({ params }: PageProps) {
                   onChange={(e) => setForm((f) => ({ ...f, reorderLevel: e.target.value }))} />
               </div>
             </div>
+            <div className="rounded-md border border-border p-3 space-y-2">
+              <div className="flex items-center gap-2">
+                <input
+                  id="d-half"
+                  type="checkbox"
+                  className="h-4 w-4 rounded border-input"
+                  checked={form.allowsHalfDose}
+                  onChange={(e) => setForm((f) => ({ ...f, allowsHalfDose: e.target.checked }))}
+                />
+                <Label htmlFor="d-half">Can be sold by the half dose</Label>
+              </div>
+              {form.allowsHalfDose && (
+                <div className="space-y-1">
+                  <Label htmlFor="d-half-price">Half-dose price (TZS)</Label>
+                  <Input id="d-half-price" type="number" min={0} step="any" inputMode="decimal"
+                    placeholder={Number.isFinite(selling) && form.sellingPrice.trim() !== "" ? String(selling / 2) : "half of the selling price"}
+                    value={form.halfDosePrice}
+                    onChange={(e) => setForm((f) => ({ ...f, halfDosePrice: e.target.value }))} />
+                  <p className="text-xs text-muted-foreground">
+                    Leave empty for half of the selling price
+                    {Number.isFinite(selling) && form.sellingPrice.trim() !== "" && <> (TZS {(selling / 2).toLocaleString()})</>}
+                    , or type a higher price to add something on top. A half dose takes half a {form.unit} of stock.
+                  </p>
+                </div>
+              )}
+            </div>
             {sellsBelowCost && (
               <p className="flex items-start gap-2 rounded-md border border-yellow-500/40 bg-yellow-500/10 p-2 text-xs text-yellow-700 dark:text-yellow-400">
                 <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
@@ -487,6 +525,9 @@ export default function DrugsPage({ params }: PageProps) {
                     <TableCell className="tabular-nums whitespace-normal align-top">
                       TZS {drug.sellingPrice.toLocaleString()}
                       <span className="text-xs text-muted-foreground"> / {drug.unit}</span>
+                      {drug.halfDosePrice != null && (
+                        <div className="text-xs text-muted-foreground">½ dose: TZS {drug.halfDosePrice.toLocaleString()}</div>
+                      )}
                       {drug.unitsPerPack > 1 && (
                         <div className="text-xs text-muted-foreground">
                           {drug.packUnit ?? "pack"} of {drug.unitsPerPack}: TZS {(drug.sellingPrice * drug.unitsPerPack).toLocaleString()}
