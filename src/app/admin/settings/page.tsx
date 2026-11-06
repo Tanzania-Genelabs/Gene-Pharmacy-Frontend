@@ -5,6 +5,7 @@ import { adminSystemApi } from "@/api/admin.api";
 import { timeAgo } from "@/lib/audit";
 import { ApprovalModeCard } from "@/components/admin/approval-mode-card";
 import { TwoFactorCard } from "@/components/admin/two-factor-card";
+import { BackupsCard } from "@/components/admin/backups-card";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -73,6 +74,8 @@ export default function AdminSettingsPage() {
       <ApprovalModeCard />
 
       <TwoFactorCard />
+
+      <BackupsCard />
 
       {data && <Status data={data} />}
     </div>
