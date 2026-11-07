@@ -288,7 +288,7 @@ export default function PurchaseOrdersPage({ params }: PageProps) {
                   <PackQuantityField
                     key={lineItem.drugId}
                     placeholder="Qty"
-                    info={packInfo(drugs?.content?.find((d) => d.id === lineItem.drugId))}
+                    info={{ ...packInfo(drugs?.content?.find((d) => d.id === lineItem.drugId)), halfUnit: false }}
                     value={lineItem.quantityOrdered}
                     onChange={(units) => setLineItem((l) => ({ ...l, quantityOrdered: units }))}
                   />
