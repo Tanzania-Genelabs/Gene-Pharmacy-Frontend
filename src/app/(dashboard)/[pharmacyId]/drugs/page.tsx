@@ -33,6 +33,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { apiErrorMessage } from "@/lib/errors";
+import { UNIT_OPTIONS } from "@/lib/drug-units";
 import { CatalogPickerDialog } from "@/components/catalog/catalog-picker-dialog";
 import type { CreateDrugRequest, DrugResponse, UpdateDrugRequest } from "@/types";
 
@@ -42,19 +43,6 @@ interface PageProps {
 
 const selectClass =
   "flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring";
-
-const UNIT_OPTIONS = [
-  { value: "tablet", label: "Tablet" },
-  { value: "capsule", label: "Capsule" },
-  { value: "syrup", label: "Syrup (ml)" },
-  { value: "injection", label: "Injection (vial)" },
-  { value: "cream", label: "Cream (g)" },
-  { value: "piece", label: "Piece" },
-  { value: "strip", label: "Strip" },
-  { value: "blister", label: "Blister" },
-  { value: "sachet", label: "Sachet" },
-  { value: "bottle", label: "Bottle" },
-];
 
 /** Form fields are text so they can be emptied while typing; they are converted on submit. */
 interface DrugForm {
