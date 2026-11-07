@@ -16,7 +16,7 @@ interface Props {
 
 /**
  * Lets staff type a quantity either in single units (6 tablets) or in packs (2 boxes, or 1.5 when half a
- * pack makes a whole number of units); the parent always receives single units. Give it `key={drugId}`
+ * pack makes a whole number of units; 5.5 units for a drug sold by the half dose); the parent always receives single units. Give it `key={drugId}`
  * so it resets per drug.
  */
 export function PackQuantityField({ id, value, onChange, info, allowNegative = false, placeholder }: Props) {
@@ -24,7 +24,8 @@ export function PackQuantityField({ id, value, onChange, info, allowNegative = f
   const [mode, setMode] = useState<"units" | "packs">("units");
   const [raw, setRaw] = useState(value ? String(value) : "");
   const multiplier = mode === "packs" && packed ? info.unitsPerPack : 1;
-  const halves = mode === "packs" && canSplitPack(info);
+  // Halves of a pack (when it splits evenly), or halves of a single unit for drugs sold by the half dose.
+  const halves = mode === "packs" ? canSplitPack(info) : Boolean(info.halfUnit);
 
   // The parent clearing the field (after a save) should clear what is typed.
   useEffect(() => {
@@ -42,9 +43,10 @@ export function PackQuantityField({ id, value, onChange, info, allowNegative = f
       onChange(0);
       return;
     }
-    // Whole packs, or halves when the pack splits evenly; otherwise a fraction of a unit can't exist, so drop it.
-    const packs = nextMode === "packs" && canSplitPack(info) ? Math.trunc(parsed * 2) / 2 : Math.trunc(parsed);
-    onChange(packs * m);
+    // Whole numbers, or halves where a half can exist; otherwise a fraction of a unit can't, so drop it.
+    const canHalve = nextMode === "packs" ? canSplitPack(info) : Boolean(info.halfUnit);
+    const counted = canHalve ? Math.trunc(parsed * 2) / 2 : Math.trunc(parsed);
+    onChange(counted * m);
   }
 
   return (
