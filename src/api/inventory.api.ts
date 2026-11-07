@@ -9,9 +9,21 @@ import type {
   StockTransferResponse,
 } from "@/types";
 
+/** Prices arrive as exact decimal strings ("2500.00"); the screens format them as numbers. */
+function normalizeStock(stock: StockResponse): StockResponse {
+  return {
+    ...stock,
+    sellingPrice: stock.sellingPrice == null ? null : Number(stock.sellingPrice),
+    allowsHalfDose: Boolean(stock.allowsHalfDose),
+    halfDosePrice: stock.halfDosePrice == null ? null : Number(stock.halfDosePrice),
+  };
+}
+
 export const inventoryApi = {
   list: (pharmacyId: string, params?: { page?: number; size?: number; branchId?: string; search?: string }) =>
-    api.get<Page<StockResponse>>(`/api/v1/pharmacies/${pharmacyId}/inventory`, { params }).then((r) => r.data),
+    api
+      .get<Page<StockResponse>>(`/api/v1/pharmacies/${pharmacyId}/inventory`, { params })
+      .then((r) => ({ ...r.data, content: r.data.content.map(normalizeStock) })),
 
   lowStock: (pharmacyId: string, params?: { branchId?: string }) =>
     api.get<Page<LowStockResponse>>(`/api/v1/pharmacies/${pharmacyId}/inventory/low-stock`, { params }).then((r) => r.data),
@@ -19,7 +31,7 @@ export const inventoryApi = {
   getByDrugAndBranch: (pharmacyId: string, drugId: string, branchId: string) =>
     api
       .get<StockResponse>(`/api/v1/pharmacies/${pharmacyId}/inventory/drug/${drugId}/branch/${branchId}`)
-      .then((r) => r.data),
+      .then((r) => normalizeStock(r.data)),
 
   adjust: (pharmacyId: string, data: StockAdjustmentRequest) =>
     api
