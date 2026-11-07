@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useEffect, useState } from "react";
+import { use, useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { inventoryApi } from "@/api/inventory.api";
 import { drugApi } from "@/api/drug.api";
@@ -29,9 +29,13 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { DrugPicker } from "@/components/inventory/drug-picker";
+import { DrugDetailsFields } from "@/components/inventory/drug-details-fields";
 import { PackQuantityField } from "@/components/inventory/pack-quantity-field";
+import { detailsChanged, detailsFromDrug, detailsNumbers, detailsToUpdate, type DrugDetailsForm } from "@/lib/drug-details";
+import { apiErrorMessage } from "@/lib/errors";
 import { formatQuantity, packInfo } from "@/lib/packs";
-import type { StockAdjustmentRequest, StockTransferRequest } from "@/types";
+import { useAuthStore } from "@/store/auth.store";
+import type { StockAdjustmentRequest, StockTransferRequest, UpdateDrugRequest } from "@/types";
 
 interface PageProps {
   params: Promise<{ pharmacyId: string }>;
@@ -52,6 +56,24 @@ export default function InventoryPage({ params }: PageProps) {
     adjustmentQuantity: 0,
     notes: "",
   });
+
+  // The branch picked for adding stock is remembered on this device until it is changed, so a long
+  // delivery can be entered without choosing the branch again for every drug.
+  const user = useAuthStore((s) => s.user);
+  const branchKey = `gene:inventory-branch:${pharmacyId}:${user?.id ?? ""}`;
+  function chooseAdjustBranch(branchId: string) {
+    setAdjustForm((f) => ({ ...f, branchId }));
+    try {
+      if (branchId) localStorage.setItem(branchKey, branchId);
+      else localStorage.removeItem(branchKey);
+    } catch {
+      /* private mode: the choice just isn't remembered */
+    }
+  }
+
+  // How the chosen drug is counted and priced; edited here and saved together with the stock entry.
+  const [details, setDetails] = useState<DrugDetailsForm | null>(null);
+  const [detailsDrugId, setDetailsDrugId] = useState("");
 
   // The search runs on the server so it covers every drug, not just the 20 on this page.
   const [stockSearch, setStockSearch] = useState("");
@@ -89,19 +111,56 @@ export default function InventoryPage({ params }: PageProps) {
     enabled: showAdjust || showTransfer,
   });
 
+  const selectedDrug = drugs?.content?.find((d) => d.id === adjustForm.drugId);
+
+  // Fill the dosage and price fields when a drug is picked. Done once per drug, so a background refresh
+  // of the drug list never wipes what is being typed.
+  if (!adjustForm.drugId && detailsDrugId) {
+    setDetails(null);
+    setDetailsDrugId("");
+  } else if (adjustForm.drugId && selectedDrug && detailsDrugId !== selectedDrug.id) {
+    setDetails(detailsFromDrug(selectedDrug));
+    setDetailsDrugId(selectedDrug.id);
+  }
+
+  // The remembered branch, once the list is known; forgotten if that branch was closed or removed.
+  const rememberedBranchId = useMemo(() => {
+    if (!branches) return "";
+    let saved: string | null = null;
+    try {
+      saved = localStorage.getItem(branchKey);
+    } catch {
+      /* ignore */
+    }
+    const active = branches.filter((b) => b.status === "Active");
+    return (active.find((b) => b.id === saved) ?? (active.length === 1 ? active[0] : undefined))?.id ?? "";
+  }, [branches, branchKey]);
+  const adjustBranchId = adjustForm.branchId || rememberedBranchId;
+
+  const detailsEdited = Boolean(details && selectedDrug && detailsChanged(details, selectedDrug));
+
   const adjustMutation = useMutation({
-    mutationFn: (data: StockAdjustmentRequest) => inventoryApi.adjust(pharmacyId, data),
-    onSuccess: () => {
-      toast.success("Stock adjusted successfully");
+    // Dosage and price first, so the quantity is checked against the drug as it is now (e.g. halves).
+    mutationFn: async ({ adjust, update }: { adjust: StockAdjustmentRequest; update: UpdateDrugRequest | null }) => {
+      if (update) await drugApi.update(pharmacyId, adjust.drugId, update);
+      if (adjust.adjustmentQuantity !== 0) await inventoryApi.adjust(pharmacyId, adjust);
+      return { detailsSaved: update !== null, stockChanged: adjust.adjustmentQuantity !== 0 };
+    },
+    onSuccess: ({ detailsSaved, stockChanged }) => {
+      toast.success(
+        detailsSaved && stockChanged ? "Stock adjusted and drug details updated"
+          : detailsSaved ? "Drug details updated"
+          : "Stock adjusted successfully",
+      );
       qc.invalidateQueries({ queryKey: ["inventory", pharmacyId] });
-      setShowAdjust(false);
-      setAdjustForm({ drugId: "", branchId: "", movementType: "Adjustment", adjustmentQuantity: 0, notes: "" });
       qc.invalidateQueries({ queryKey: ["expiry"] });
+      setShowAdjust(false);
+      // The branch stays; everything else starts fresh for the next drug.
+      setAdjustForm((f) => ({ drugId: "", branchId: f.branchId, movementType: "Adjustment", adjustmentQuantity: 0, notes: "" }));
     },
-    onError: (err: unknown) => {
-      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
-      toast.error(msg ?? "Failed to adjust stock");
-    },
+    onError: (err: unknown) => toast.error(apiErrorMessage(err, "Failed to adjust stock")),
+    // The details may have been saved even when the stock step failed.
+    onSettled: () => qc.invalidateQueries({ queryKey: ["drugs", pharmacyId] }),
   });
 
   const transferMutation = useMutation({
@@ -129,8 +188,8 @@ export default function InventoryPage({ params }: PageProps) {
       toast.error("Source and destination branch must differ");
       return;
     }
-    if (!Number.isInteger(transferForm.quantity) || transferForm.quantity < 1) {
-      toast.error("Quantity must be at least 1");
+    if (transferForm.quantity < 0.5 || !Number.isInteger(transferForm.quantity * 2)) {
+      toast.error("Quantity must be at least half a unit, in whole numbers or halves");
       return;
     }
     transferMutation.mutate(transferForm);
@@ -144,17 +203,48 @@ export default function InventoryPage({ params }: PageProps) {
     setShowAdjust(true);
   }
 
+  // The quantity is entered in the drug as it is being edited here (a new pack size, half doses, …).
+  const adjustInfo = (() => {
+    if (!details) return packInfo(selectedDrug);
+    const n = detailsNumbers(details);
+    return {
+      unit: details.unit,
+      unitsPerPack: n.sellsInPacks ? n.unitsPerPack : 1,
+      packUnit: n.sellsInPacks ? details.packUnit.trim() || null : null,
+      halfUnit: details.allowsHalfDose,
+    };
+  })();
+
   function handleAdjustSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!adjustForm.drugId || !adjustForm.branchId) {
-      toast.error("Drug and branch are required");
+    if (!adjustForm.drugId) {
+      toast.error("Choose a drug");
       return;
     }
-    if (adjustForm.adjustmentQuantity === 0) {
-      toast.error("Quantity cannot be zero");
+    const changesStock = adjustForm.adjustmentQuantity !== 0;
+    if (changesStock && !adjustBranchId) {
+      toast.error("Choose a branch");
       return;
     }
-    adjustMutation.mutate(addingStock ? adjustForm : { ...adjustForm, expiryDate: undefined, batchNumber: undefined });
+    let update: UpdateDrugRequest | null = null;
+    if (details && detailsEdited) {
+      const result = detailsToUpdate(details);
+      if ("error" in result) {
+        toast.error(result.error);
+        return;
+      }
+      update = result.update;
+    }
+    if (!changesStock && !update) {
+      toast.error("Enter a quantity, or change the dosage or price");
+      return;
+    }
+    adjustMutation.mutate({
+      adjust: addingStock
+        ? { ...adjustForm, branchId: adjustBranchId }
+        : { ...adjustForm, branchId: adjustBranchId, expiryDate: undefined, batchNumber: undefined },
+      update,
+    });
   }
 
   return (
@@ -180,7 +270,7 @@ export default function InventoryPage({ params }: PageProps) {
 
       {/* Adjust Stock Dialog */}
       <Dialog open={showAdjust} onOpenChange={setShowAdjust}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>Adjust Stock</DialogTitle>
           </DialogHeader>
@@ -200,15 +290,20 @@ export default function InventoryPage({ params }: PageProps) {
               <select
                 id="adj-branch"
                 className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
-                value={adjustForm.branchId}
-                onChange={(e) => setAdjustForm((f) => ({ ...f, branchId: e.target.value }))}
+                value={adjustBranchId}
+                onChange={(e) => chooseAdjustBranch(e.target.value)}
               >
-                <option value="">Select branch…</option>
+                {!adjustBranchId && <option value="">Select branch…</option>}
                 {branches?.map((b) => (
                   <option key={b.id} value={b.id}>{b.name}</option>
                 ))}
               </select>
+              <p className="text-xs text-muted-foreground">Remembered until you change it.</p>
             </div>
+
+            {details && selectedDrug && (
+              <DrugDetailsFields value={details} onChange={setDetails} changed={detailsEdited} />
+            )}
 
             <div className="space-y-1">
               <Label htmlFor="adj-type">Adjustment Type *</Label>
@@ -241,7 +336,7 @@ export default function InventoryPage({ params }: PageProps) {
                 id="adj-qty"
                 allowNegative
                 placeholder="e.g. 50 or -10"
-                info={packInfo(drugs?.content?.find((d) => d.id === adjustForm.drugId))}
+                info={adjustInfo}
                 value={adjustForm.adjustmentQuantity}
                 onChange={(units) => setAdjustForm((f) => ({ ...f, adjustmentQuantity: units }))}
               />
@@ -290,7 +385,7 @@ export default function InventoryPage({ params }: PageProps) {
                 Cancel
               </Button>
               <Button type="submit" disabled={adjustMutation.isPending}>
-                {adjustMutation.isPending ? "Saving…" : "Apply Adjustment"}
+                {adjustMutation.isPending ? "Saving…" : adjustForm.adjustmentQuantity === 0 && detailsEdited ? "Save details" : "Apply Adjustment"}
               </Button>
             </DialogFooter>
           </form>
@@ -428,6 +523,7 @@ export default function InventoryPage({ params }: PageProps) {
                     <TableHead>Drug</TableHead>
                     <TableHead>Branch</TableHead>
                     <TableHead>Stock Level</TableHead>
+                    <TableHead>Price</TableHead>
                     <TableHead>Reorder Level</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead className="w-24" />
@@ -437,7 +533,7 @@ export default function InventoryPage({ params }: PageProps) {
                   {isLoading ? (
                     Array.from({ length: 5 }).map((_, i) => (
                       <TableRow key={i}>
-                        {Array.from({ length: 6 }).map((_, j) => (
+                        {Array.from({ length: 7 }).map((_, j) => (
                           <TableCell key={j}>
                             <div className="h-4 w-full bg-muted animate-pulse rounded" />
                           </TableCell>
@@ -446,7 +542,7 @@ export default function InventoryPage({ params }: PageProps) {
                     ))
                   ) : stockList?.content.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={6} className="text-center text-muted-foreground py-12">
+                      <TableCell colSpan={7} className="text-center text-muted-foreground py-12">
                         {stockTerm ? `No stock matches “${stockTerm}”` : "No stock records found"}
                       </TableCell>
                     </TableRow>
@@ -457,6 +553,24 @@ export default function InventoryPage({ params }: PageProps) {
                         <TableCell className="text-muted-foreground">{stock.branchName}</TableCell>
                         <TableCell className="tabular-nums font-semibold">
                           {formatQuantity(stock.quantity, packInfo(stock))}
+                        </TableCell>
+                        <TableCell className="tabular-nums text-sm">
+                          {stock.sellingPrice == null ? "—" : (
+                            <>
+                              TZS {stock.sellingPrice.toLocaleString()}
+                              <span className="text-xs text-muted-foreground"> / {stock.unit}</span>
+                              {stock.allowsHalfDose && (
+                                <div className="text-xs text-muted-foreground">
+                                  ½ dose: TZS {(stock.halfDosePrice ?? stock.sellingPrice / 2).toLocaleString()}
+                                </div>
+                              )}
+                              {stock.unitsPerPack > 1 && (
+                                <div className="text-xs text-muted-foreground">
+                                  {stock.packUnit ?? "pack"} of {stock.unitsPerPack}: TZS {(stock.sellingPrice * stock.unitsPerPack).toLocaleString()}
+                                </div>
+                              )}
+                            </>
+                          )}
                         </TableCell>
                         <TableCell className="tabular-nums text-muted-foreground">
                           {stock.reorderLevel} {stock.unit}
