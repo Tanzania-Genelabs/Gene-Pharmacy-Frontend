@@ -6,15 +6,18 @@ export interface PackInfo {
   unit: string;
   unitsPerPack: number;
   packUnit: string | null;
+  /** The drug is sold by the half dose, so its stock can also be counted in halves (5.5 blisters). */
+  halfUnit?: boolean;
 }
 
 export function packInfo(
-  drug?: { unit?: string | null; unitsPerPack?: number | null; packUnit?: string | null } | null,
+  drug?: { unit?: string | null; unitsPerPack?: number | null; packUnit?: string | null; allowsHalfDose?: boolean | null } | null,
 ): PackInfo {
   return {
     unit: drug?.unit || "unit",
     unitsPerPack: drug?.unitsPerPack && drug.unitsPerPack > 1 ? drug.unitsPerPack : 1,
     packUnit: drug?.packUnit || null,
+    halfUnit: Boolean(drug?.allowsHalfDose),
   };
 }
 
