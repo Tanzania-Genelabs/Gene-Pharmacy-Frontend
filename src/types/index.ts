@@ -413,6 +413,10 @@ export interface StockResponse {
   unit: string;
   unitsPerPack: number;
   packUnit: string | null;
+  /** Price of one `unit`. The API client converts the server's decimal string to a number. */
+  sellingPrice: number | null;
+  allowsHalfDose: boolean;
+  halfDosePrice: number | null;
   quantity: number;
   reorderLevel: number;
   expiryDate: string | null;
