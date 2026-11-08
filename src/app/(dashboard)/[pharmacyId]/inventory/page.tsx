@@ -2,11 +2,16 @@
 
 import { use, useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import Link from "next/link";
 import { inventoryApi } from "@/api/inventory.api";
+import { insightsApi } from "@/api/insights.api";
+import { money } from "@/components/expenses/format";
 import { drugApi } from "@/api/drug.api";
 import { branchApi } from "@/api/branch.api";
 import { toast } from "sonner";
-import { Search, AlertTriangle, Package, ArrowRightLeft } from "lucide-react";
+import {
+  Search, AlertTriangle, Package, ArrowRightLeft, Boxes, PackageX, TrendingDown, Wallet, CalendarClock, ChevronDown,
+} from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
@@ -35,7 +40,37 @@ import { detailsChanged, detailsFromDrug, detailsNumbers, detailsToUpdate, type 
 import { apiErrorMessage } from "@/lib/errors";
 import { formatQuantity, packInfo } from "@/lib/packs";
 import { useAuthStore } from "@/store/auth.store";
-import type { StockAdjustmentRequest, StockTransferRequest, UpdateDrugRequest } from "@/types";
+import { cn } from "@/lib/utils";
+import type { StockAdjustmentRequest, StockResponse, StockStatusFilter, StockTransferRequest, UpdateDrugRequest } from "@/types";
+
+const STATUS_CHIPS: { value: StockStatusFilter | ""; label: string }[] = [
+  { value: "", label: "All" },
+  { value: "low", label: "Low" },
+  { value: "out", label: "Out of stock" },
+  { value: "ok", label: "OK" },
+];
+
+/** Same rules as the server's status filter: out = empty, low = at/under the reorder level, otherwise OK. */
+function stockStatus(stock: Pick<StockResponse, "quantity" | "reorderLevel">): StockStatusFilter {
+  if (stock.quantity <= 0) return "out";
+  if (stock.quantity <= stock.reorderLevel) return "low";
+  return "ok";
+}
+
+function StatusBadge({ status }: { status: StockStatusFilter }) {
+  const style = {
+    out: "bg-red-600 text-white",
+    low: "bg-amber-500 text-white",
+    ok: "bg-emerald-600/15 text-emerald-700 dark:text-emerald-400",
+  }[status];
+  const label = { out: "Out of stock", low: "Low", ok: "OK" }[status];
+  return <span className={cn("inline-flex rounded-full px-2 py-0.5 text-xs font-semibold whitespace-nowrap", style)}>{label}</span>;
+}
+
+function fmtUnits(n: number | string) {
+  const v = Number(n);
+  return Number.isInteger(v) ? v.toLocaleString() : v.toFixed(1);
+}
 
 interface PageProps {
   params: Promise<{ pharmacyId: string }>;
@@ -83,15 +118,37 @@ export default function InventoryPage({ params }: PageProps) {
     return () => clearTimeout(timer);
   }, [stockSearch]);
 
+  // What the stock table and the numbers above it are about: one branch or all of them, and a status.
+  const [viewBranchId, setViewBranchId] = useState("");
+  const [statusFilter, setStatusFilter] = useState<StockStatusFilter | "">("");
+  const [invTab, setInvTab] = useState("stock");
+  function chooseStatus(status: StockStatusFilter | "") {
+    setStatusFilter(status);
+    setPage(0);
+  }
+  /** From a number card: filter the table and bring it into view. */
+  function showStatus(status: StockStatusFilter | "") {
+    chooseStatus(status);
+    setInvTab("stock");
+    document.getElementById("stock-table")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
   const { data: stockList, isLoading } = useQuery({
-    queryKey: ["inventory", pharmacyId, page, stockTerm],
-    queryFn: () => inventoryApi.list(pharmacyId, { page, size: 20, search: stockTerm || undefined }),
+    queryKey: ["inventory", pharmacyId, page, stockTerm, statusFilter, viewBranchId],
+    queryFn: () =>
+      inventoryApi.list(pharmacyId, {
+        page,
+        size: 20,
+        search: stockTerm || undefined,
+        status: statusFilter || undefined,
+        branchId: viewBranchId || undefined,
+      }),
     placeholderData: (prev) => prev,
   });
 
-  const { data: lowStock } = useQuery({
-    queryKey: ["inventory", "low-stock", pharmacyId],
-    queryFn: () => inventoryApi.lowStock(pharmacyId),
+  const { data: insights, isError: insightsError } = useQuery({
+    queryKey: ["inventory", pharmacyId, "insights", viewBranchId],
+    queryFn: () => insightsApi.inventoryInsights(pharmacyId, { branchId: viewBranchId || undefined }),
   });
 
   const { data: movements } = useQuery({
@@ -108,7 +165,6 @@ export default function InventoryPage({ params }: PageProps) {
   const { data: branches } = useQuery({
     queryKey: ["branches", pharmacyId],
     queryFn: () => branchApi.list(pharmacyId),
-    enabled: showAdjust || showTransfer,
   });
 
   const selectedDrug = drugs?.content?.find((d) => d.id === adjustForm.drugId);
@@ -249,14 +305,25 @@ export default function InventoryPage({ params }: PageProps) {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-2xl font-bold tracking-tight text-foreground">Inventory</h2>
           <p className="text-muted-foreground text-sm mt-1">
-            {stockList?.totalElements ?? 0} stock records
+            How much stock you have, what it is worth, and what to buy next.
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+          <select
+            aria-label="Branch"
+            className="h-9 rounded-md border border-input bg-transparent px-3 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
+            value={viewBranchId}
+            onChange={(e) => { setViewBranchId(e.target.value); setPage(0); }}
+          >
+            <option value="">All branches</option>
+            {branches?.map((b) => (
+              <option key={b.id} value={b.id}>{b.name}</option>
+            ))}
+          </select>
           <Button variant="outline" size="sm" onClick={() => setShowTransfer(true)}>
             <ArrowRightLeft className="h-4 w-4 mr-2" />
             Transfer Stock
@@ -473,48 +540,237 @@ export default function InventoryPage({ params }: PageProps) {
         </DialogContent>
       </Dialog>
 
-      {/* Low stock summary */}
-      {lowStock && lowStock.totalElements > 0 && (
-        <Card className="border-orange-200 dark:border-orange-800 bg-orange-50 dark:bg-orange-950/20">
-          <CardHeader className="pb-3">
-            <CardTitle className="text-sm font-medium text-orange-700 dark:text-orange-400 flex items-center gap-2">
-              <AlertTriangle className="h-4 w-4" />
-              {lowStock.totalElements} items are below reorder level
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex flex-wrap gap-2">
-              {lowStock.content.slice(0, 6).map((item) => (
-                <Badge key={`${item.drugId}-${item.branchId}`} variant="outline" className="border-orange-300 dark:border-orange-700">
-                  {item.drugName}: {formatQuantity(item.currentStock, packInfo(item))} left
-                </Badge>
-              ))}
-              {lowStock.totalElements > 6 && (
-                <Badge variant="outline" className="border-orange-300">
-                  +{lowStock.totalElements - 6} more
-                </Badge>
-              )}
+      {/* ── Stock at a glance ─────────────────────────────────────────── */}
+      {insightsError && (
+        <p className="text-sm text-red-600">Could not load the stock numbers. Check your connection and try again.</p>
+      )}
+      {insights && (
+        <section className="space-y-4">
+          {(insights.missingBuyingPrice > 0 || insights.missingSellingPrice > 0) && (
+            <div className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <div className="space-y-0.5">
+                {insights.missingBuyingPrice > 0 && (
+                  <p>
+                    <strong>{insights.missingBuyingPrice}</strong> product{insights.missingBuyingPrice === 1 ? " has" : "s have"} no
+                    buying price — profit numbers will be wrong.
+                  </p>
+                )}
+                {insights.missingSellingPrice > 0 && (
+                  <p>
+                    <strong>{insights.missingSellingPrice}</strong> product{insights.missingSellingPrice === 1 ? " has" : "s have"} no
+                    selling price — the &quot;value if all sold&quot; is too low.
+                  </p>
+                )}
+                <p className="text-xs opacity-80">Add the prices on the Drugs page, or with &quot;Adjust&quot; in the table below.</p>
+              </div>
             </div>
-          </CardContent>
-        </Card>
+          )}
+
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <button type="button" onClick={() => showStatus("")} className="text-left">
+              <Card className="h-full transition-colors hover:border-primary">
+                <CardContent className="p-4">
+                  <p className="flex items-center gap-1.5 text-xs text-muted-foreground"><Boxes className="h-3.5 w-3.5" />Products in stock</p>
+                  <p className="text-2xl font-bold tabular-nums">{insights.inStock.toLocaleString()}</p>
+                  <p className="text-[11px] text-muted-foreground">
+                    of {insights.products.toLocaleString()} products · {fmtUnits(insights.totalUnits)} units in total
+                  </p>
+                </CardContent>
+              </Card>
+            </button>
+            <button type="button" onClick={() => showStatus("low")} className="text-left">
+              <Card className={cn("h-full transition-colors hover:border-primary", insights.lowStock > 0 && "border-amber-300 dark:border-amber-800")}>
+                <CardContent className="p-4">
+                  <p className="flex items-center gap-1.5 text-xs text-muted-foreground"><TrendingDown className="h-3.5 w-3.5" />Low stock</p>
+                  <p className={cn("text-2xl font-bold tabular-nums", insights.lowStock > 0 && "text-amber-600")}>{insights.lowStock}</p>
+                  <p className="text-[11px] text-muted-foreground">At or under the reorder level · tap to see</p>
+                </CardContent>
+              </Card>
+            </button>
+            <button type="button" onClick={() => showStatus("out")} className="text-left">
+              <Card className={cn("h-full transition-colors hover:border-primary", insights.outOfStock > 0 && "border-red-300 dark:border-red-800")}>
+                <CardContent className="p-4">
+                  <p className="flex items-center gap-1.5 text-xs text-muted-foreground"><PackageX className="h-3.5 w-3.5" />Out of stock</p>
+                  <p className={cn("text-2xl font-bold tabular-nums", insights.outOfStock > 0 && "text-red-600")}>{insights.outOfStock}</p>
+                  <p className="text-[11px] text-muted-foreground">None left to sell · tap to see</p>
+                </CardContent>
+              </Card>
+            </button>
+            <Link href={`/${pharmacyId}/expiry`} className="text-left">
+              <Card className={cn("h-full transition-colors hover:border-primary", (insights.expired.batches > 0 || insights.expiringSoon.batches > 0) && "border-orange-300 dark:border-orange-800")}>
+                <CardContent className="p-4">
+                  <p className="flex items-center gap-1.5 text-xs text-muted-foreground"><CalendarClock className="h-3.5 w-3.5" />Expiring in {insights.expiringSoon.days} days</p>
+                  <p className={cn("text-2xl font-bold tabular-nums", insights.expiringSoon.batches > 0 && "text-orange-600")}>
+                    {insights.expiringSoon.batches} <span className="text-sm font-normal text-muted-foreground">batch{insights.expiringSoon.batches === 1 ? "" : "es"}</span>
+                  </p>
+                  <p className="text-[11px] text-muted-foreground">Worth {money(insights.expiringSoon.costValue)} at cost</p>
+                  <p className={cn("text-[11px]", insights.expired.batches > 0 ? "font-medium text-red-600" : "text-muted-foreground")}>
+                    Already expired: {insights.expired.batches} ({money(insights.expired.costValue)})
+                  </p>
+                </CardContent>
+              </Card>
+            </Link>
+          </div>
+
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <Card>
+              <CardContent className="p-4">
+                <p className="flex items-center gap-1.5 text-xs text-muted-foreground"><Wallet className="h-3.5 w-3.5" />Stock value (what you paid)</p>
+                <p className="text-xl font-bold tabular-nums">{money(insights.costValue)}</p>
+                <p className="text-[11px] text-muted-foreground">Everything on the shelf at its buying price</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="p-4">
+                <p className="text-xs text-muted-foreground">Value if all sold</p>
+                <p className="text-xl font-bold tabular-nums">{money(insights.retailValue)}</p>
+                <p className="text-[11px] text-muted-foreground">Everything on the shelf at its selling price</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="p-4">
+                <p className="text-xs text-muted-foreground">Expected profit</p>
+                <p className={cn("text-xl font-bold tabular-nums", Number(insights.expectedProfit) < 0 ? "text-red-600" : "text-emerald-600")}>
+                  {money(insights.expectedProfit)}
+                </p>
+                <p className="text-[11px] text-muted-foreground">Value if all sold − stock value</p>
+              </CardContent>
+            </Card>
+          </div>
+
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm">Running out soon</CardTitle>
+                <p className="text-xs text-muted-foreground">Based on how fast each drug sold recently. Buy these first.</p>
+              </CardHeader>
+              <CardContent>
+                {insights.runningOut.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">Nothing is about to run out.</p>
+                ) : (
+                  <ul className="divide-y">
+                    {insights.runningOut.map((r) => (
+                      <li key={r.drugId} className="flex flex-wrap items-baseline justify-between gap-x-3 py-2 text-sm">
+                        <span className="font-medium">{r.drugName}</span>
+                        <span className="text-muted-foreground">
+                          <span className="font-semibold text-foreground">{fmtUnits(r.quantity)}</span> {r.unit ?? ""} left
+                          {" · "}sells ~{fmtUnits(Number(Number(r.soldPerDay).toFixed(1)))}/day
+                          {r.daysLeft != null && (
+                            <>
+                              {" · "}
+                              <span className={cn("font-semibold", Number(r.daysLeft) <= 3 ? "text-red-600" : "text-amber-600")}>
+                                ~{Math.max(0, Math.floor(Number(r.daysLeft)))} day{Math.floor(Number(r.daysLeft)) === 1 ? "" : "s"} left
+                              </span>
+                            </>
+                          )}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm">Biggest stock value</CardTitle>
+                <p className="text-xs text-muted-foreground">Where most of your money is sitting on the shelf.</p>
+              </CardHeader>
+              <CardContent>
+                {insights.topValue.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No stock yet.</p>
+                ) : (
+                  <ul className="divide-y">
+                    {insights.topValue.map((r) => (
+                      <li key={r.drugId} className="flex flex-wrap items-baseline justify-between gap-x-3 py-2 text-sm">
+                        <span className="font-medium">
+                          {r.drugName}{" "}
+                          <span className="text-xs font-normal text-muted-foreground">{fmtUnits(r.quantity)} {r.unit ?? ""}</span>
+                        </span>
+                        <span className="tabular-nums">
+                          <span className="font-semibold">{money(r.costValue)}</span>
+                          <span className="text-xs text-muted-foreground"> · sells for {money(r.retailValue)}</span>
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+
+          {insights.categories.length > 0 && (
+            <details className="group rounded-xl border bg-card">
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-2 p-4 text-sm font-medium">
+                <span>Stock by category ({insights.categories.length})</span>
+                <ChevronDown className="h-4 w-4 transition-transform group-open:rotate-180" />
+              </summary>
+              <div className="px-4 pb-4">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Category</TableHead>
+                      <TableHead className="text-right">Products</TableHead>
+                      <TableHead className="text-right">Low or out</TableHead>
+                      <TableHead className="text-right">Value (what you paid)</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {insights.categories.map((c) => (
+                      <TableRow key={c.category ?? "none"}>
+                        <TableCell className="font-medium">{c.category ?? "No category"}</TableCell>
+                        <TableCell className="text-right tabular-nums">{c.products}</TableCell>
+                        <TableCell className={cn("text-right tabular-nums", c.lowOrOut > 0 && "font-semibold text-amber-600")}>{c.lowOrOut}</TableCell>
+                        <TableCell className="text-right tabular-nums whitespace-nowrap">{money(c.costValue)}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </details>
+          )}
+        </section>
       )}
 
-      <Tabs defaultValue="stock">
+      <Tabs value={invTab} onValueChange={setInvTab} id="stock-table" className="scroll-mt-4">
         <TabsList>
           <TabsTrigger value="stock">Current Stock</TabsTrigger>
           <TabsTrigger value="movements">Stock Movements</TabsTrigger>
         </TabsList>
 
         <TabsContent value="stock" className="mt-4 space-y-3">
-          <div className="relative max-w-sm">
-            <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-            <Input
-              placeholder="Search stock by name, brand or barcode…"
-              className="pl-8"
-              value={stockSearch}
-              onChange={(e) => setStockSearch(e.target.value)}
-            />
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div className="relative w-full sm:max-w-sm">
+              <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder="Search stock by name, brand or barcode…"
+                className="pl-8"
+                value={stockSearch}
+                onChange={(e) => setStockSearch(e.target.value)}
+              />
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {STATUS_CHIPS.map((c) => (
+                <button
+                  key={c.value || "all"}
+                  type="button"
+                  onClick={() => chooseStatus(c.value)}
+                  className={cn(
+                    "rounded-full border px-3 py-1 text-sm font-medium transition-colors",
+                    statusFilter === c.value
+                      ? "border-primary bg-primary text-primary-foreground"
+                      : "border-input bg-background text-muted-foreground hover:border-primary hover:text-foreground",
+                  )}
+                >
+                  {c.label}
+                </button>
+              ))}
+            </div>
           </div>
+          <p className="text-xs text-muted-foreground">
+            {stockList?.totalElements ?? 0} stock record{stockList?.totalElements === 1 ? "" : "s"}
+            {statusFilter && ` · showing only "${STATUS_CHIPS.find((c) => c.value === statusFilter)?.label}"`}
+          </p>
           <Card>
             <CardContent className="p-0">
               <Table>
@@ -522,9 +778,9 @@ export default function InventoryPage({ params }: PageProps) {
                   <TableRow>
                     <TableHead>Drug</TableHead>
                     <TableHead>Branch</TableHead>
-                    <TableHead>Stock Level</TableHead>
-                    <TableHead>Price</TableHead>
-                    <TableHead>Reorder Level</TableHead>
+                    <TableHead>In stock</TableHead>
+                    <TableHead>Selling price</TableHead>
+                    <TableHead>Reorder at</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead className="w-24" />
                   </TableRow>
@@ -543,7 +799,7 @@ export default function InventoryPage({ params }: PageProps) {
                   ) : stockList?.content.length === 0 ? (
                     <TableRow>
                       <TableCell colSpan={7} className="text-center text-muted-foreground py-12">
-                        {stockTerm ? `No stock matches “${stockTerm}”` : "No stock records found"}
+                        {stockTerm ? `No stock matches “${stockTerm}”` : statusFilter ? "Nothing here — good news" : "No stock records found"}
                       </TableCell>
                     </TableRow>
                   ) : (
@@ -551,8 +807,11 @@ export default function InventoryPage({ params }: PageProps) {
                       <TableRow key={stock.id}>
                         <TableCell className="font-medium">{stock.drugName}</TableCell>
                         <TableCell className="text-muted-foreground">{stock.branchName}</TableCell>
-                        <TableCell className="tabular-nums font-semibold">
+                        <TableCell className="tabular-nums font-semibold whitespace-nowrap">
                           {formatQuantity(stock.quantity, packInfo(stock))}
+                          {stock.unitsPerPack > 1 && (
+                            <div className="text-xs font-normal text-muted-foreground">= {fmtUnits(stock.quantity)} {stock.unit}</div>
+                          )}
                         </TableCell>
                         <TableCell className="tabular-nums text-sm">
                           {stock.sellingPrice == null ? "—" : (
@@ -576,15 +835,7 @@ export default function InventoryPage({ params }: PageProps) {
                           {stock.reorderLevel} {stock.unit}
                         </TableCell>
                         <TableCell>
-                          <Badge
-                            variant={
-                              stock.quantity <= stock.reorderLevel
-                                ? "destructive"
-                                : "default"
-                            }
-                          >
-                            {stock.quantity <= stock.reorderLevel ? "Low" : "OK"}
-                          </Badge>
+                          <StatusBadge status={stockStatus(stock)} />
                         </TableCell>
                         <TableCell>
                           <Button
