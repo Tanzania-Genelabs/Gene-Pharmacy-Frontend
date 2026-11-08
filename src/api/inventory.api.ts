@@ -20,7 +20,10 @@ function normalizeStock(stock: StockResponse): StockResponse {
 }
 
 export const inventoryApi = {
-  list: (pharmacyId: string, params?: { page?: number; size?: number; branchId?: string; search?: string }) =>
+  list: (
+    pharmacyId: string,
+    params?: { page?: number; size?: number; branchId?: string; search?: string; status?: "low" | "out" | "ok" },
+  ) =>
     api
       .get<Page<StockResponse>>(`/api/v1/pharmacies/${pharmacyId}/inventory`, { params })
       .then((r) => ({ ...r.data, content: r.data.content.map(normalizeStock) })),
