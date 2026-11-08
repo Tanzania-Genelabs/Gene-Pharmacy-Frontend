@@ -1824,3 +1824,90 @@ export interface InventoryInsightsResponse {
 }
 
 export type StockStatusFilter = "low" | "out" | "ok";
+
+// ─── Owner dashboard ─────────────────────────────────────────────────────────
+// GET dashboard/owner — one cached response for the Owner/Manager home screen. Money values are
+// decimal strings ("4000.00"); counts are integers.
+
+export interface DashboardDay {
+  date: string;
+  revenue: string;
+  salesCount: number;
+  voidedCount: number;
+  cost: string;
+  profit: string;
+  avgSale: string;
+}
+
+export interface DashboardSpan {
+  from: string;
+  to: string;
+  revenue: string;
+  profit: string;
+  salesCount: number;
+}
+
+export interface DashboardTopProduct {
+  drugId: string;
+  drugName: string;
+  unit: string | null;
+  unitsSold: number;
+  revenue: string;
+  profit: string;
+}
+
+export interface DashboardSetupItem {
+  key: "branch" | "drugs" | "stock" | "sellingPrices" | "buyingPrices" | "firstSale" | "secondUser" | string;
+  label: string;
+  done: boolean;
+}
+
+export interface OwnerDashboardResponse {
+  generatedAt: string;
+  timezone: string;
+  branchId: string | null;
+  cacheSeconds: number;
+  today: DashboardDay;
+  yesterday: DashboardDay;
+  sameDayLastWeek: { date: string; revenue: string; salesCount: number };
+  /** Always 24 entries, hour 0 to 23 in the shop's timezone. */
+  hourly: { hour: number; revenue: string; salesCount: number }[];
+  week: { thisWeek: DashboardSpan; lastWeek: DashboardSpan };
+  month: { thisMonth: DashboardSpan; lastMonth: DashboardSpan };
+  /** Always 14 entries, oldest first; the last one is today. */
+  daily: { date: string; revenue: string; profit: string; salesCount: number }[];
+  topProducts: { today: DashboardTopProduct[]; last7Days: DashboardTopProduct[] };
+  /** Empty when one branch is shown or the pharmacy has a single branch. */
+  branches: { branchId: string; branchName: string; revenue: string; salesCount: number; profit: string }[];
+  sellers: {
+    userId: string | null;
+    name: string;
+    branchId: string | null;
+    branchName: string | null;
+    revenue: string;
+    salesCount: number;
+    voidedCount: number;
+    profit: string;
+  }[];
+  attention: {
+    outOfStockSelling: { count: number; top: { drugId: string; drugName: string; soldLast30: number }[] };
+    runningOut: { drugId: string; drugName: string; unit: string | null; quantity: number; daysLeft: number }[];
+    lowStockCount: number;
+    outOfStockCount: number;
+    expiringSoon: { batches: number; costValue: string; days: number };
+    expired: { batches: number; costValue: string };
+    belowCostSales: number;
+    missingBuyingPrice: number;
+    voidedToday: number;
+    unusualDiscountCount: number;
+    openShifts: { shiftId: string; branchName: string | null; userName: string | null; openedAt: string }[];
+  };
+  stock: { costValue: string; retailValue: string; products: number; inStock: number };
+  setup: { items: DashboardSetupItem[]; doneCount: number; total: number };
+  records: {
+    bestDayRevenue: { date: string; revenue: string } | null;
+    isBestDayThisMonth: boolean;
+    isBestDayLast90: boolean;
+  };
+  streak: { daysWithSales: number };
+}
