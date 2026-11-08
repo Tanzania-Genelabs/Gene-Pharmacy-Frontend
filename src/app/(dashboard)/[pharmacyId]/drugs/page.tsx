@@ -42,7 +42,14 @@ export default function DrugsPage({ params }: PageProps) {
 
   const [searchInput, setSearchInput] = useState("");
   const search = useDebounced(searchInput.trim(), 300);
-  const [filters, setFilters] = useState<DrugFilters>(NO_FILTERS);
+  const searchParams = useSearchParams();
+  // A quick filter can be opened from a link, e.g. ?quick=noBuying from the dashboard.
+  const [filters, setFilters] = useState<DrugFilters>(() => {
+    const quick = searchParams.get("quick");
+    return quick === "noBuying" || quick === "noSelling" || quick === "belowCost" || quick === "neverSold" || quick === "attention"
+      ? { ...NO_FILTERS, quick, showInactive: quick === "noSelling" }
+      : NO_FILTERS;
+  });
   const [page, setPage] = useState(0);
   const [sort, setSort] = useState<DrugSort>("name");
   const [direction, setDirection] = useState<"asc" | "desc">("asc");
@@ -54,7 +61,7 @@ export default function DrugsPage({ params }: PageProps) {
   const [editing, setEditing] = useState<DrugResponse | null>(null);
   // The per-item catalog picker can be opened straight away with a barcode (?catalog=...) when the
   // till scanned a product this pharmacy doesn't have yet.
-  const catalogParam = useSearchParams().get("catalog");
+  const catalogParam = searchParams.get("catalog");
   const [showCatalogPicker, setShowCatalogPicker] = useState(!!catalogParam);
   const [showCatalogAdd, setShowCatalogAdd] = useState(false);
   const [showDuplicates, setShowDuplicates] = useState(false);
