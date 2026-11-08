@@ -1,16 +1,20 @@
 "use client";
 
 import { use, useState, useMemo, useRef, useCallback, useEffect } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { salesApi } from "@/api/sales.api";
 import { drugApi, drugCategoryApi } from "@/api/drug.api";
 import { branchApi } from "@/api/branch.api";
 import { inventoryApi } from "@/api/inventory.api";
+import { insightsApi } from "@/api/insights.api";
+import { PeriodPicker } from "@/components/insights/period-picker";
+import { money } from "@/components/expenses/format";
+import { dayHeading, isValidRange, presetRange, rangeInstants, rangeLabel, ymd, type DateRange, type PeriodPreset } from "@/lib/periods";
 import { useAuthStore } from "@/store/auth.store";
 import { toast } from "sonner";
 import {
   ShoppingCart, Search, Plus, Minus, Trash2, X, Receipt,
-  Printer, History, Monitor, MoreHorizontal, Pill, Package, AlertCircle,
+  Printer, History, Monitor, MoreHorizontal, Pill, Package, AlertCircle, CalendarDays,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -21,7 +25,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { canSplitPack, formatQuantity, hasPacks, packInfo, packLabel, type PackInfo } from "@/lib/packs";
-import type { DrugResponse, SaleResponse, SaleSummaryResponse, SaleStatus, SalePaymentMethod, CreateSaleRequest } from "@/types";
+import { cn } from "@/lib/utils";
+import type { DrugResponse, SaleResponse, SaleSummaryResponse, SaleStatus, SalePaymentMethod, CreateSaleRequest, SalesDayRow } from "@/types";
 
 interface PageProps { params: Promise<{ pharmacyId: string }> }
 
@@ -45,8 +50,128 @@ const cartKey = (drugId: string, halfDose: boolean) => `${drugId}:${halfDose ? "
 const stockUnitsOf = (i: Pick<CartItem, "quantity" | "halfDose">) => (i.halfDose ? i.quantity / 2 : i.quantity);
 
 function fmt(n: number) { return n.toLocaleString("en-TZ"); }
+
+const HISTORY_PRESETS: PeriodPreset[] = ["today", "yesterday", "7d", "month", "custom"];
+
+/** Stock counts can be halves (5.5 tablets) when a drug is sold by the half dose. */
+function fmtUnits(n: number) {
+  return Number.isInteger(n) ? String(n) : n.toFixed(1);
+}
+
+/** How much is left to sell: green when plenty, amber at/under the reorder level, red when none. */
+function StockBadge({ left, onShelf, reorderLevel, unit, className }: {
+  left: number; onShelf: number; reorderLevel: number; unit: string; className?: string;
+}) {
+  const none = left <= 0;
+  const low = !none && left <= reorderLevel;
+  const title = `On the shelf: ${fmtUnits(onShelf)} ${unit}${onShelf === left ? "" : ` · after this cart: ${fmtUnits(Math.max(0, left))}`}`;
+  return (
+    <span
+      title={title}
+      className={cn(
+        "inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold whitespace-nowrap",
+        none ? "bg-red-600 text-white" : low ? "bg-amber-500 text-white" : "bg-emerald-600/15 text-emerald-700 dark:text-emerald-400",
+        className,
+      )}
+    >
+      {onShelf <= 0 ? "Out" : none ? "0 left" : `${fmtUnits(left)} left`}
+    </span>
+  );
+}
 function fmtDate(s: string) {
   return new Date(s).toLocaleString("en-TZ", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+/** What was sold on a receipt, e.g. "Panadol ×2" ("½" marks half doses); the first few lines, then a count. */
+function SaleItemsCell({ sale }: { sale: SaleSummaryResponse }) {
+  const items = sale.items ?? [];
+  if (items.length === 0) return <span className="text-muted-foreground">{sale.totalItems} item{sale.totalItems === 1 ? "" : "s"}</span>;
+  return (
+    <div className="space-y-0.5 text-sm">
+      {items.slice(0, 3).map((item, i) => (
+        <div key={i} className="max-w-[260px] truncate" title={item.drugName ?? "Unknown drug"}>
+          {item.drugName ?? "Unknown drug"} <span className="text-muted-foreground">×{item.quantity}{item.isHalfDose ? " (½)" : ""}</span>
+        </div>
+      ))}
+      {items.length > 3 && <div className="text-xs text-muted-foreground">+{items.length - 3} more</div>}
+    </div>
+  );
+}
+
+interface SalesTableProps {
+  sales: SaleSummaryResponse[] | undefined;
+  loading: boolean;
+  emptyText: string;
+  isSeller: boolean;
+  onView: (saleId: string) => void;
+  onVoid: (sale: SaleSummaryResponse) => void;
+}
+
+/** The receipts list shared by "Today's Sales" and "Sales History". */
+function SalesTable({ sales, loading, emptyText, isSeller, onView, onVoid }: SalesTableProps) {
+  return (
+    <Card>
+      <CardContent className="p-0">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Receipt #</TableHead>
+              <TableHead>Branch</TableHead>
+              <TableHead>Items</TableHead>
+              <TableHead>Total</TableHead>
+              <TableHead>Payment</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead>Date</TableHead>
+              <TableHead className="w-10" />
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {loading ? (
+              Array.from({ length: 8 }).map((_, i) => (
+                <TableRow key={i}>{Array.from({ length: 8 }).map((_, j) => (
+                  <TableCell key={j}><div className="h-4 w-full bg-muted animate-pulse rounded" /></TableCell>
+                ))}</TableRow>
+              ))
+            ) : !sales?.length ? (
+              <TableRow>
+                <TableCell colSpan={8} className="text-center py-16 text-muted-foreground">
+                  <ShoppingCart className="h-8 w-8 mx-auto mb-2 opacity-25" />
+                  <p>{emptyText}</p>
+                </TableCell>
+              </TableRow>
+            ) : sales.map((sale) => (
+              <TableRow key={sale.id} className={cn("hover:bg-accent/40", sale.status === "Voided" && "opacity-60 [&_td:not(:last-child)]:line-through")}>
+                <TableCell className="font-mono text-xs">{sale.receiptNumber}</TableCell>
+                <TableCell className="text-sm text-muted-foreground">{sale.branchName ?? `${sale.branchId.slice(0, 8)}…`}</TableCell>
+                <TableCell><SaleItemsCell sale={sale} /></TableCell>
+                <TableCell className="tabular-nums font-medium text-sm">TZS {fmt(Number(sale.netAmount))}</TableCell>
+                <TableCell><Badge variant="outline" className="text-xs">{sale.paymentMethod}</Badge></TableCell>
+                <TableCell><Badge variant={STATUS_VARIANT[sale.status] ?? "secondary"} className="text-xs">{sale.status}</Badge></TableCell>
+                <TableCell className="text-xs text-muted-foreground">{fmtDate(sale.saleDate)}</TableCell>
+                <TableCell>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="ghost" size="icon" className="h-8 w-8"><MoreHorizontal className="h-4 w-4" /></Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem onClick={() => onView(sale.id)}>
+                        <Receipt className="h-4 w-4 mr-2" />View Receipt
+                      </DropdownMenuItem>
+                      {sale.status === "Completed" && !isSeller && (
+                        <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={() => onVoid(sale)}>
+                          Void Sale
+                        </DropdownMenuItem>
+                      )}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
+  );
 }
 
 function ReceiptContent({ sale, drugNames }: { sale: SaleResponse; drugNames?: Record<string, string> }) {
@@ -130,7 +255,7 @@ export default function SalesPage({ params }: PageProps) {
   // Sellers are bound to a single branch at account creation — no choice needed.
   const isSeller = user?.role === "Seller";
 
-  const [tab, setTab] = useState<"pos" | "history">("pos");
+  const [tab, setTab] = useState<"pos" | "today" | "history">("pos");
   // Owners and managers pick a branch once; it is remembered on this device until they change it.
   const branchKey = `gene:sales-branch:${pharmacyId}:${user?.id ?? ""}`;
   const [branchId, setBranchIdState] = useState(user?.branchId ?? "");
@@ -152,7 +277,12 @@ export default function SalesPage({ params }: PageProps) {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [receiptSale, setReceiptSale] = useState<SaleResponse | null>(null);
   const [receiptDrugNames, setReceiptDrugNames] = useState<Record<string, string>>({});
-  const [histPage, setHistPage] = useState(0);
+  // Sales history: a period (Today by default), a branch, and whether to split the list by day.
+  const [histPreset, setHistPreset] = useState<PeriodPreset>("today");
+  const [histCustom, setHistCustom] = useState<DateRange>(() => ({ from: ymd(new Date()), to: ymd(new Date()) }));
+  /** null = follow the branch chosen for selling; "" = all branches. */
+  const [histBranch, setHistBranch] = useState<string | null>(null);
+  const [histByDay, setHistByDay] = useState(true);
   const [voidTarget, setVoidTarget] = useState<SaleSummaryResponse | null>(null);
   const [voidReason, setVoidReason] = useState("");
   const [detailSale, setDetailSale] = useState<SaleResponse | null>(null);
@@ -179,12 +309,70 @@ export default function SalesPage({ params }: PageProps) {
     queryFn: () => drugApi.list(pharmacyId, { page: 0, size: 200, search: search || undefined }),
     placeholderData: (prev) => prev,
   });
-  const { data: history, isLoading: histLoading } = useQuery({
-    queryKey: ["sales", pharmacyId, histPage],
-    queryFn: () => salesApi.list(pharmacyId, { page: histPage, size: 20 }),
+  const histRange = presetRange(histPreset, histCustom);
+  const histRangeValid = isValidRange(histRange);
+  // Sellers only ever see their own branch; the server enforces this too.
+  const histBranchId = isSeller ? (user?.branchId ?? "") : (histBranch ?? branchId);
+  const histBranchParam = histBranchId || undefined;
+  // The first and last instant of the chosen days on this device's clock.
+  const histInstants = histRangeValid ? rangeInstants(histRange) : null;
+  // Day headers and totals: one row per day that had sales, worked out on the server.
+  const { data: histDays, isLoading: histDaysLoading, isError: histDaysError } = useQuery({
+    queryKey: ["sales", pharmacyId, "days", histRange.from, histRange.to, histBranchParam ?? "all"],
+    queryFn: () => insightsApi.salesDays(pharmacyId, { from: histRange.from, to: histRange.to, branchId: histBranchParam }),
+    enabled: tab === "history" && histRangeValid,
     placeholderData: (prev) => prev,
-    enabled: tab === "history",
   });
+  // The receipts themselves, 200 at a time.
+  const historyQuery = useInfiniteQuery({
+    queryKey: ["sales", pharmacyId, "history", histInstants?.from, histInstants?.to, histBranchParam ?? "all"],
+    queryFn: ({ pageParam }) =>
+      salesApi.list(pharmacyId, { page: pageParam, size: 200, from: histInstants!.from, to: histInstants!.to, branchId: histBranchParam }),
+    initialPageParam: 0,
+    getNextPageParam: (last) => (last.last || last.number + 1 >= last.totalPages ? undefined : last.number + 1),
+    enabled: tab === "history" && !!histInstants,
+  });
+  const histSales = useMemo(() => historyQuery.data?.pages.flatMap((p) => p.content) ?? [], [historyQuery.data]);
+  const histTotalReceipts = historyQuery.data?.pages[0]?.totalElements ?? 0;
+  const histSalesByDay = useMemo(() => {
+    const map = new Map<string, SaleSummaryResponse[]>();
+    for (const sale of histSales) {
+      const key = ymd(new Date(sale.saleDate));
+      const list = map.get(key);
+      if (list) list.push(sale);
+      else map.set(key, [sale]);
+    }
+    return map;
+  }, [histSales]);
+  // Every day from the server's list, plus any day that only shows up in the loaded receipts; newest first.
+  const histDayRows = useMemo(() => {
+    const rows = new Map<string, SalesDayRow | null>();
+    for (const d of histDays?.days ?? []) rows.set(d.date, d);
+    for (const key of histSalesByDay.keys()) if (!rows.has(key)) rows.set(key, null);
+    return [...rows.entries()].sort((a, b) => (a[0] < b[0] ? 1 : -1));
+  }, [histDays, histSalesByDay]);
+  const histShowProfit = !isSeller && histDays?.totals.profit != null;
+
+  // "Today" is the caller's own calendar day, so it starts and ends at local midnight whatever the server's clock says.
+  const todayKey = new Date().toDateString();
+  const todayRange = useMemo(() => {
+    const now = new Date();
+    return {
+      from: new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString(),
+      to: new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999).toISOString(),
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [todayKey]);
+  const { data: today, isLoading: todayLoading } = useQuery({
+    queryKey: ["sales", pharmacyId, "today", todayKey],
+    queryFn: () => salesApi.list(pharmacyId, { page: 0, size: 200, from: todayRange.from, to: todayRange.to }),
+    placeholderData: (prev) => prev,
+    enabled: tab === "today",
+    refetchInterval: 30_000,
+  });
+  const todayCompleted = (today?.content ?? []).filter((sale) => sale.status === "Completed");
+  const todayTotal = todayCompleted.reduce((sum, sale) => sum + Number(sale.netAmount), 0);
+  const todayVoided = (today?.content ?? []).filter((sale) => sale.status === "Voided").length;
 
   const drugs = useMemo(() => {
     const all = drugsPage?.content.filter((d) => d.active) ?? [];
@@ -211,7 +399,7 @@ export default function SalesPage({ params }: PageProps) {
     const quantity = Math.max(0, row?.quantity ?? 0);
     const reorderLevel = row?.reorderLevel ?? drug.reorderLevel ?? 0;
     const known = !!branchId && !stockLoading;
-    return { known, quantity, out: known && quantity <= 0, low: known && quantity > 0 && quantity <= reorderLevel };
+    return { known, quantity, reorderLevel, out: known && quantity <= 0, low: known && quantity > 0 && quantity <= reorderLevel };
   }, [stockByDrug, stockLoading, branchId]);
 
   /** Stock the drug's cart lines take, optionally leaving out one line. */
@@ -347,15 +535,16 @@ export default function SalesPage({ params }: PageProps) {
   return (
     <div className="flex flex-col">
       {/* ── Tab Bar ──────────────────────────────────────────────────────── */}
-      <div className="flex items-center gap-1 mb-4 border-b border-border">
+      <div className="flex items-center gap-1 mb-4 border-b border-border overflow-x-auto">
         {[
           { key: "pos" as const, label: "POS Terminal", icon: Monitor },
+          { key: "today" as const, label: "Today's Sales", icon: CalendarDays },
           { key: "history" as const, label: "Sales History", icon: History },
         ].map(({ key, label, icon: Icon }) => (
           <button
             key={key}
             onClick={() => setTab(key)}
-            className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+            className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
               tab === key ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"
             }`}
           >
@@ -364,8 +553,11 @@ export default function SalesPage({ params }: PageProps) {
             {key === "pos" && cart.length > 0 && (
               <span className="ml-1 bg-primary text-primary-foreground text-xs rounded-full w-5 h-5 flex items-center justify-center">{cart.length}</span>
             )}
-            {key === "history" && history && (
-              <span className="text-xs text-muted-foreground ml-1">({history.totalElements})</span>
+            {key === "today" && today && (
+              <span className="text-xs text-muted-foreground ml-1">({today.totalElements})</span>
+            )}
+            {key === "history" && tab === "history" && histDays && (
+              <span className="text-xs text-muted-foreground ml-1">({histDays.totals.salesCount})</span>
             )}
           </button>
         ))}
@@ -475,8 +667,15 @@ export default function SalesPage({ params }: PageProps) {
                         {drug.genericName && <p className="text-[10px] text-muted-foreground truncate mb-1">{drug.genericName}</p>}
                         <p className="text-sm font-bold text-primary">TZS {fmt(drug.sellingPrice)}</p>
                         <p className="text-[10px] text-muted-foreground">per {drug.unit}</p>
-                        {stock.out && <Badge variant="destructive" className="mt-1.5">Out of stock</Badge>}
-                        {stock.low && <Badge className="mt-1.5 border-transparent bg-amber-500 text-white hover:bg-amber-500">Low · {stock.quantity} left</Badge>}
+                        {stock.known && (
+                          <StockBadge
+                            className="mt-1.5"
+                            left={stock.quantity - stockUsedBy(drug.id)}
+                            onShelf={stock.quantity}
+                            reorderLevel={stock.reorderLevel}
+                            unit={drug.unit}
+                          />
+                        )}
                         {drug.halfDosePrice != null && (
                           <button
                             type="button"
@@ -581,6 +780,21 @@ export default function SalesPage({ params }: PageProps) {
                           {!item.halfDose && hasPacks(item.info) && (
                             <p className="text-[10px] text-muted-foreground">{formatQuantity(item.quantity, item.info)}</p>
                           )}
+                          {branchId && !stockLoading && (() => {
+                            const row = stockByDrug.get(item.drugId);
+                            const onShelf = Math.max(0, row?.quantity ?? 0);
+                            return (
+                              <div className="mt-1 flex items-center gap-1 text-[10px] text-muted-foreground">
+                                <StockBadge
+                                  left={onShelf - stockUsedBy(item.drugId)}
+                                  onShelf={onShelf}
+                                  reorderLevel={row?.reorderLevel ?? 0}
+                                  unit={item.info.unit}
+                                />
+                                <span>after this sale</span>
+                              </div>
+                            );
+                          })()}
                         </div>
                         <button onClick={() => setCart((p) => p.filter((i) => cartKey(i.drugId, i.halfDose) !== key))} className="text-muted-foreground hover:text-destructive transition-colors">
                           <X className="h-3.5 w-3.5" />
@@ -694,79 +908,188 @@ export default function SalesPage({ params }: PageProps) {
       )}
 
       {/* ════════════════════════════════════════════════════════════════════
+          TODAY'S SALES
+      ════════════════════════════════════════════════════════════════════ */}
+      {tab === "today" && (
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <Card><CardContent className="p-4">
+              <p className="text-xs text-muted-foreground">Sales today</p>
+              <p className="text-2xl font-bold tabular-nums">{todayCompleted.length}</p>
+            </CardContent></Card>
+            <Card><CardContent className="p-4">
+              <p className="text-xs text-muted-foreground">Total sold today</p>
+              <p className="text-2xl font-bold tabular-nums">TZS {fmt(todayTotal)}</p>
+            </CardContent></Card>
+            <Card><CardContent className="p-4">
+              <p className="text-xs text-muted-foreground">Voided today</p>
+              <p className="text-2xl font-bold tabular-nums">{todayVoided}</p>
+            </CardContent></Card>
+          </div>
+          <p className="text-sm text-muted-foreground">
+            {new Date().toLocaleDateString("en-TZ", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}
+            {today && today.totalElements > today.content.length && ` · showing the latest ${today.content.length} of ${today.totalElements}; totals cover only these`}
+          </p>
+          <SalesTable
+            sales={today?.content}
+            loading={todayLoading}
+            emptyText="No sales yet today"
+            isSeller={isSeller}
+            onView={viewDetail}
+            onVoid={(sale) => { setVoidTarget(sale); setVoidReason(""); }}
+          />
+        </div>
+      )}
+
+      {/* ════════════════════════════════════════════════════════════════════
           SALES HISTORY
       ════════════════════════════════════════════════════════════════════ */}
       {tab === "history" && (
         <div className="space-y-4">
-          <p className="text-sm text-muted-foreground">{history?.totalElements ?? 0} total transactions</p>
-          <Card>
-            <CardContent className="p-0">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Receipt #</TableHead>
-                    <TableHead>Branch</TableHead>
-                    <TableHead>Items</TableHead>
-                    <TableHead>Total</TableHead>
-                    <TableHead>Payment</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Date</TableHead>
-                    <TableHead className="w-10" />
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {histLoading ? (
-                    Array.from({ length: 8 }).map((_, i) => (
-                      <TableRow key={i}>{Array.from({ length: 8 }).map((_, j) => (
-                        <TableCell key={j}><div className="h-4 w-full bg-muted animate-pulse rounded" /></TableCell>
-                      ))}</TableRow>
-                    ))
-                  ) : !history?.content.length ? (
-                    <TableRow>
-                      <TableCell colSpan={8} className="text-center py-16 text-muted-foreground">
-                        <ShoppingCart className="h-8 w-8 mx-auto mb-2 opacity-25" />
-                        <p>No sales recorded yet</p>
-                      </TableCell>
-                    </TableRow>
-                  ) : history.content.map((sale) => (
-                    <TableRow key={sale.id} className="hover:bg-accent/40">
-                      <TableCell className="font-mono text-xs">{sale.receiptNumber}</TableCell>
-                      <TableCell className="text-sm font-mono text-xs text-muted-foreground">{sale.branchId.slice(0, 8)}…</TableCell>
-                      <TableCell className="tabular-nums text-sm">{sale.totalItems}</TableCell>
-                      <TableCell className="tabular-nums font-medium text-sm">TZS {fmt(sale.netAmount)}</TableCell>
-                      <TableCell><Badge variant="outline" className="text-xs">{sale.paymentMethod}</Badge></TableCell>
-                      <TableCell><Badge variant={STATUS_VARIANT[sale.status] ?? "secondary"} className="text-xs">{sale.status}</Badge></TableCell>
-                      <TableCell className="text-xs text-muted-foreground">{fmtDate(sale.saleDate)}</TableCell>
-                      <TableCell>
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" size="icon" className="h-8 w-8"><MoreHorizontal className="h-4 w-4" /></Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            <DropdownMenuItem onClick={() => viewDetail(sale.id)}>
-                              <Receipt className="h-4 w-4 mr-2" />View Receipt
-                            </DropdownMenuItem>
-                            {sale.status === "Completed" && !isSeller && (
-                              <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={() => { setVoidTarget(sale); setVoidReason(""); }}>
-                                Void Sale
-                              </DropdownMenuItem>
-                            )}
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      </TableCell>
-                    </TableRow>
+          {/* Which days, which branch */}
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <PeriodPicker
+              presets={HISTORY_PRESETS}
+              preset={histPreset}
+              onPresetChange={setHistPreset}
+              custom={histCustom}
+              onCustomChange={setHistCustom}
+            />
+            <div className="flex flex-wrap items-center gap-2">
+              {!isSeller && (
+                <select
+                  aria-label="Branch"
+                  className="h-9 rounded-md border border-input bg-background px-3 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
+                  value={histBranchId}
+                  onChange={(e) => setHistBranch(e.target.value)}
+                >
+                  <option value="">All branches</option>
+                  {branches?.map((b) => (
+                    <option key={b.id} value={b.id}>{b.name}</option>
                   ))}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
-          {history && history.totalPages > 1 && (
-            <div className="flex items-center justify-between text-sm text-muted-foreground">
-              <span>Page {histPage + 1} of {history.totalPages}</span>
-              <div className="flex gap-2">
-                <Button variant="outline" size="sm" disabled={history.first} onClick={() => setHistPage((p) => p - 1)}>Previous</Button>
-                <Button variant="outline" size="sm" disabled={history.last} onClick={() => setHistPage((p) => p + 1)}>Next</Button>
+                </select>
+              )}
+              <div className="flex rounded-md border border-input p-0.5 text-sm">
+                {[
+                  { value: true, label: "By day" },
+                  { value: false, label: "One list" },
+                ].map((v) => (
+                  <button
+                    key={v.label}
+                    type="button"
+                    onClick={() => setHistByDay(v.value)}
+                    className={cn(
+                      "rounded px-3 py-1 font-medium transition-colors",
+                      histByDay === v.value ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    {v.label}
+                  </button>
+                ))}
               </div>
+            </div>
+          </div>
+
+          {histRangeValid && (
+            <>
+              {/* Summary for the whole period */}
+              <p className="text-sm text-muted-foreground">
+                {rangeLabel(histRange)} · {histBranchId ? (branches?.find((b) => b.id === histBranchId)?.name ?? "One branch") : "All branches"}
+              </p>
+              <div className={cn("grid grid-cols-2 gap-3", histShowProfit ? "lg:grid-cols-4" : "sm:grid-cols-3")}>
+                <Card><CardContent className="p-4">
+                  <p className="text-xs text-muted-foreground">Sales</p>
+                  <p className="text-2xl font-bold tabular-nums">{histDays ? histDays.totals.salesCount : "—"}</p>
+                  <p className="text-[11px] text-muted-foreground">Receipts that were not voided</p>
+                </CardContent></Card>
+                <Card><CardContent className="p-4">
+                  <p className="text-xs text-muted-foreground">Total sold</p>
+                  <p className="text-2xl font-bold tabular-nums">{histDays ? money(histDays.totals.revenue) : "—"}</p>
+                  <p className="text-[11px] text-muted-foreground">Money from those sales</p>
+                </CardContent></Card>
+                <Card><CardContent className="p-4">
+                  <p className="text-xs text-muted-foreground">Voided</p>
+                  <p className="text-2xl font-bold tabular-nums">{histDays ? histDays.totals.voidedCount : "—"}</p>
+                  <p className="text-[11px] text-muted-foreground">Cancelled; not in the totals</p>
+                </CardContent></Card>
+                {histShowProfit && histDays && (
+                  <Card><CardContent className="p-4">
+                    <p className="text-xs text-muted-foreground">Profit</p>
+                    <p className={cn("text-2xl font-bold tabular-nums", Number(histDays.totals.profit) < 0 ? "text-red-600" : "text-emerald-600")}>
+                      {money(histDays.totals.profit)}
+                    </p>
+                    <p className="text-[11px] text-muted-foreground">Total sold − buying price of what was sold</p>
+                  </CardContent></Card>
+                )}
+              </div>
+              {histDaysError && (
+                <p className="text-sm text-red-600">Could not load the totals for these days. Check your connection and try again.</p>
+              )}
+            </>
+          )}
+
+          {!histRangeValid ? null : historyQuery.isLoading || (histByDay && histDaysLoading) ? (
+            <SalesTable sales={undefined} loading emptyText="" isSeller={isSeller} onView={viewDetail} onVoid={() => {}} />
+          ) : !histByDay ? (
+            <SalesTable
+              sales={histSales}
+              loading={false}
+              emptyText="No sales on these days"
+              isSeller={isSeller}
+              onView={viewDetail}
+              onVoid={(sale) => { setVoidTarget(sale); setVoidReason(""); }}
+            />
+          ) : histDayRows.length === 0 ? (
+            <Card><CardContent className="py-16 text-center text-muted-foreground">
+              <ShoppingCart className="h-8 w-8 mx-auto mb-2 opacity-25" />
+              <p>No sales on these days</p>
+            </CardContent></Card>
+          ) : (
+            <div className="space-y-5">
+              {histDayRows.map(([date, day]) => {
+                const rows = histSalesByDay.get(date) ?? [];
+                const completed = rows.filter((r) => r.status === "Completed");
+                const count = day ? day.salesCount : completed.length;
+                const total = day ? Number(day.revenue) : completed.reduce((sum, r) => sum + Number(r.netAmount), 0);
+                return (
+                  <section key={date} className="space-y-2">
+                    <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 border-b border-border pb-1">
+                      <h3 className="font-semibold">{dayHeading(date)}</h3>
+                      <div className="flex flex-wrap gap-x-4 text-sm text-muted-foreground">
+                        <span>{count} sale{count === 1 ? "" : "s"}</span>
+                        <span className="font-semibold text-foreground tabular-nums">{money(total)}</span>
+                        {histShowProfit && day?.profit != null && (
+                          <span className={cn("tabular-nums", Number(day.profit) < 0 ? "text-red-600" : "text-emerald-600")}>
+                            Profit {money(day.profit)}
+                          </span>
+                        )}
+                        {day && day.voidedCount > 0 && <span>{day.voidedCount} voided</span>}
+                      </div>
+                    </div>
+                    {rows.length > 0 ? (
+                      <SalesTable
+                        sales={rows}
+                        loading={false}
+                        emptyText=""
+                        isSeller={isSeller}
+                        onView={viewDetail}
+                        onVoid={(sale) => { setVoidTarget(sale); setVoidReason(""); }}
+                      />
+                    ) : (
+                      <p className="text-sm text-muted-foreground">Press &quot;Load more&quot; below to see this day&apos;s receipts.</p>
+                    )}
+                  </section>
+                );
+              })}
+            </div>
+          )}
+
+          {histRangeValid && historyQuery.hasNextPage && (
+            <div className="flex flex-col items-center gap-2 text-sm text-muted-foreground">
+              <span>Showing {histSales.length} of {histTotalReceipts} receipts</span>
+              <Button variant="outline" disabled={historyQuery.isFetchingNextPage} onClick={() => historyQuery.fetchNextPage()}>
+                {historyQuery.isFetchingNextPage ? "Loading…" : "Load more"}
+              </Button>
             </div>
           )}
         </div>
