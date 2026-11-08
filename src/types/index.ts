@@ -613,6 +613,19 @@ export interface StockTransferResponse {
 export type SaleStatus = "Completed" | "Voided" | "Pending";
 export type SalePaymentMethod = "Cash" | "Card" | "MobileMoney" | "Insurance" | "Credit";
 
+export type SalePaymentProvider = "MPesa" | "TigoPesa" | "AirtelMoney" | "HaloPesa" | "Other";
+
+export const SALE_PAYMENT_PROVIDERS: { value: SalePaymentProvider; label: string }[] = [
+  { value: "MPesa", label: "M-Pesa" },
+  { value: "TigoPesa", label: "Tigo Pesa" },
+  { value: "AirtelMoney", label: "Airtel Money" },
+  { value: "HaloPesa", label: "HaloPesa" },
+  { value: "Other", label: "Other" },
+];
+
+export const salePaymentProviderLabel = (v?: string | null): string =>
+  SALE_PAYMENT_PROVIDERS.find((p) => p.value === v)?.label ?? v ?? "";
+
 export interface SaleItemRequest {
   drugId: string;
   /** Whole units, or halves when isHalfDose is set. */
@@ -631,6 +644,10 @@ export interface CreateSaleRequest {
   /** Unique receipt identifier, e.g. RCP-20260225-001 */
   receiptNumber: string;
   paymentMethod: SalePaymentMethod;
+  /** Mobile money network; only with paymentMethod MobileMoney. */
+  paymentProvider?: SalePaymentProvider;
+  /** Transaction id (max 60); only for MobileMoney, Card or Insurance. */
+  paymentReference?: string;
   /** Amount tendered by the customer */
   amountPaid: number;
   /** Optional sale-level discount (monetary, not percentage) */
@@ -659,6 +676,10 @@ export interface SaleResponse {
   saleDate: string;
   status: SaleStatus;
   paymentMethod: SalePaymentMethod;
+  paymentProvider?: SalePaymentProvider | null;
+  paymentReference?: string | null;
+  /** Set when the reference was already used by another sale in the last 30 days. */
+  warnings?: string[];
   /** Sum of all item line totals before sale-level discount */
   totalAmount: number;
   discountAmount: number;
@@ -679,6 +700,8 @@ export interface SaleSummaryResponse {
   saleDate: string;
   status: SaleStatus;
   paymentMethod: SalePaymentMethod;
+  paymentProvider?: SalePaymentProvider | null;
+  paymentReference?: string | null;
   /** The server sends decimal strings ("2000.00"); wrap in Number() before doing arithmetic. */
   netAmount: number;
   /** Number of lines on the receipt. */
