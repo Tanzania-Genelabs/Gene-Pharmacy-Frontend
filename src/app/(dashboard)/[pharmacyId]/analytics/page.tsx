@@ -4,9 +4,10 @@ import { use, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { analyticsApi } from "@/api/analytics.api";
 import { branchApi } from "@/api/branch.api";
+import { insightsApi } from "@/api/insights.api";
+import { PeriodPicker } from "@/components/insights/period-picker";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
@@ -19,42 +20,34 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import {
-  TrendingUp,
-  TrendingDown,
   DollarSign,
-  ShoppingCart,
-  AlertTriangle,
   Package,
   Building2,
   Users,
   Wallet,
+  ShoppingCart,
+  HelpCircle,
+  Search,
+  TrendingDown,
 } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { useAuthStore } from "@/store/auth.store";
+import { isValidRange, parseYmd, presetRange, rangeLabel, ymd, type DateRange, type PeriodPreset } from "@/lib/periods";
+import type { ProfitGroup, ProfitPeriodRow } from "@/types";
 
 interface PageProps {
   params: Promise<{ pharmacyId: string }>;
 }
 
-type Preset = "today" | "7d" | "30d" | "custom";
+const MONEY_PRESETS: PeriodPreset[] = ["today", "yesterday", "7d", "month", "lastMonth", "custom"];
 
-const PRESETS: { value: Preset; label: string }[] = [
-  { value: "today", label: "Today" },
-  { value: "7d", label: "Last 7 days" },
-  { value: "30d", label: "Last 30 days" },
-  { value: "custom", label: "Custom" },
+const GROUPS: { value: ProfitGroup; label: string }[] = [
+  { value: "day", label: "Day" },
+  { value: "week", label: "Week" },
+  { value: "month", label: "Month" },
 ];
 
-/** Local calendar date as YYYY-MM-DD (toISOString would give the UTC date, which is wrong near midnight). */
-function ymd(date: Date): string {
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const d = String(date.getDate()).padStart(2, "0");
-  return `${date.getFullYear()}-${m}-${d}`;
-}
-
-function daysAgo(n: number): Date {
-  const d = new Date();
-  d.setDate(d.getDate() - n);
-  return d;
-}
+type ProductSort = "most" | "least" | "loss";
 
 /** The API sends money as decimal strings. */
 function tzs(value: string | number | null | undefined): string {
@@ -69,27 +62,32 @@ function profitClass(value: string | number | null | undefined): string {
   return Number(value ?? 0) < 0 ? "text-red-600" : "text-green-600";
 }
 
+/** "Sat 7 Nov", "Week of 2 Nov", "Nov 2026". */
+function periodLabel(row: ProfitPeriodRow): string {
+  if (row.group === "month") {
+    const [y, m] = row.period.split("-").map(Number);
+    return new Date(y, (m || 1) - 1, 1).toLocaleDateString("en-GB", { month: "long", year: "numeric" });
+  }
+  const d = parseYmd(row.period).toLocaleDateString("en-GB", { weekday: row.group === "day" ? "short" : undefined, day: "numeric", month: "short" });
+  return row.group === "week" ? `Week of ${d}` : d;
+}
+
 export default function AnalyticsPage({ params }: PageProps) {
   const { pharmacyId } = use(params);
+  const role = useAuthStore((s) => s.user?.role);
+  // Profit is for owners and managers only (the server refuses it to sellers too).
+  const canSeeProfit = role === "Owner" || role === "Manager" || role === "SuperAdmin";
   const [tab, setTab] = useState("branches");
   const [branchId, setBranchId] = useState("");
-  const [preset, setPreset] = useState<Preset>("today");
-  const [customFrom, setCustomFrom] = useState(ymd(daysAgo(6)));
-  const [customTo, setCustomTo] = useState(ymd(new Date()));
+  const [preset, setPreset] = useState<PeriodPreset>("today");
+  const [custom, setCustom] = useState<DateRange>(() => ({ from: ymd(new Date()), to: ymd(new Date()) }));
+  const [group, setGroup] = useState<ProfitGroup>("day");
+  const [productSearch, setProductSearch] = useState("");
+  const [productSort, setProductSort] = useState<ProductSort>("most");
+  const [showHelp, setShowHelp] = useState(false);
 
-  const range = useMemo(() => {
-    switch (preset) {
-      case "today":
-        return { from: ymd(new Date()), to: ymd(new Date()) };
-      case "7d":
-        return { from: ymd(daysAgo(6)), to: ymd(new Date()) };
-      case "30d":
-        return { from: ymd(daysAgo(29)), to: ymd(new Date()) };
-      case "custom":
-        return { from: customFrom, to: customTo };
-    }
-  }, [preset, customFrom, customTo]);
-  const rangeValid = Boolean(range.from && range.to && range.from <= range.to);
+  const range = presetRange(preset, custom);
+  const rangeValid = isValidRange(range);
   const branchParam = branchId || undefined;
 
   const { data: branches } = useQuery({
@@ -97,81 +95,46 @@ export default function AnalyticsPage({ params }: PageProps) {
     queryFn: () => branchApi.list(pharmacyId),
   });
 
-  // The headline cards are always "today", optionally narrowed to one branch.
+  // Only used for the warning badges (sold below cost, heavy discounts, reorders) for today.
   const { data: summary } = useQuery({
     queryKey: ["analytics", "daily-summary", pharmacyId, branchId],
     queryFn: () => analyticsApi.dailySummary(pharmacyId, { date: ymd(new Date()), branchId: branchParam }),
     refetchInterval: 60_000,
+    enabled: canSeeProfit,
+  });
+
+  const { data: breakdown, isLoading: breakdownLoading, isError: breakdownError } = useQuery({
+    queryKey: ["analytics", "profit-breakdown", pharmacyId, range.from, range.to, branchId, group],
+    queryFn: () => insightsApi.profitBreakdown(pharmacyId, { from: range.from, to: range.to, branchId: branchParam, group }),
+    enabled: canSeeProfit && rangeValid,
+    placeholderData: (prev) => prev,
   });
 
   const { data: scorecards, isLoading: scorecardsLoading } = useQuery({
-    queryKey: ["analytics", "scorecards", pharmacyId, range],
+    queryKey: ["analytics", "scorecards", pharmacyId, range.from, range.to],
     queryFn: () => analyticsApi.branchScorecards(pharmacyId, range),
-    enabled: tab === "branches" && rangeValid,
+    enabled: canSeeProfit && tab === "branches" && rangeValid,
   });
 
   const { data: sellers, isLoading: sellersLoading } = useQuery({
-    queryKey: ["analytics", "sellers", pharmacyId, range, branchId],
+    queryKey: ["analytics", "sellers", pharmacyId, range.from, range.to, branchId],
     queryFn: () => analyticsApi.sellerPerformance(pharmacyId, { ...range, branchId: branchParam }),
-    enabled: tab === "sellers" && rangeValid,
+    enabled: canSeeProfit && tab === "sellers" && rangeValid,
   });
 
   const { data: deadStock } = useQuery({
     queryKey: ["analytics", "dead-stock", pharmacyId],
     queryFn: () => analyticsApi.deadStock(pharmacyId, { daysSinceLastSale: 60 }),
-    enabled: tab === "dead-stock",
+    enabled: canSeeProfit && tab === "dead-stock",
   });
 
   const { data: marginLeaks } = useQuery({
-    queryKey: ["analytics", "margin-leakage", pharmacyId, range, branchId],
+    queryKey: ["analytics", "margin-leakage", pharmacyId, range.from, range.to, branchId],
     queryFn: () => analyticsApi.marginLeakage(pharmacyId, { ...range, branchId: branchParam }),
-    enabled: tab === "margins" && rangeValid,
+    enabled: canSeeProfit && tab === "margins" && rangeValid,
   });
 
-  const revenueChange = Number(summary?.sales?.revenueChange ?? 0);
-  const yesterdayRevenue = Number(summary?.sales?.yesterdayRevenue ?? 0);
-  // No percentage when yesterday had no sales: there is nothing to compare against.
-  const revenueChangePct = yesterdayRevenue > 0 ? (revenueChange / yesterdayRevenue) * 100 : null;
   const scopeLabel = branchId ? (branches?.find((b) => b.id === branchId)?.name ?? "Branch") : "All branches";
-
-  const summaryStats = [
-    {
-      title: "Today's Revenue",
-      value: summary ? tzs(summary.sales.todayRevenue) : "—",
-      icon: DollarSign,
-      color: "text-green-600",
-      bg: "bg-green-50 dark:bg-green-950/30",
-      detail:
-        revenueChangePct !== null
-          ? { text: `${revenueChange >= 0 ? "+" : ""}${revenueChangePct.toFixed(1)}% vs yesterday`, up: revenueChange >= 0 }
-          : undefined,
-    },
-    {
-      title: "Today's Profit",
-      value: summary ? tzs(summary.sales.grossProfit) : "—",
-      valueClass: summary ? profitClass(summary.sales.grossProfit) : "",
-      icon: Wallet,
-      color: "text-emerald-600",
-      bg: "bg-emerald-50 dark:bg-emerald-950/30",
-      note: summary ? `${pct(summary.sales.marginPct)} margin · cost ${tzs(summary.sales.totalCost)}` : undefined,
-    },
-    {
-      title: "Sales Today",
-      value: summary?.sales?.todayCount ?? "—",
-      icon: ShoppingCart,
-      color: "text-blue-600",
-      bg: "bg-blue-50 dark:bg-blue-950/30",
-      note: summary && summary.sales.voidedCount > 0 ? `${summary.sales.voidedCount} voided` : undefined,
-    },
-    {
-      title: "Low Stock Items",
-      value: summary?.inventory?.lowStockCount ?? "—",
-      icon: AlertTriangle,
-      color: "text-orange-600",
-      bg: "bg-orange-50 dark:bg-orange-950/30",
-      note: summary ? `${summary.inventory.nearExpiryCount} expiring in 30 days` : undefined,
-    },
-  ];
 
   const branchTotals = useMemo(() => {
     const rows = scorecards ?? [];
@@ -185,36 +148,75 @@ export default function AnalyticsPage({ params }: PageProps) {
     };
   }, [scorecards]);
 
-  const periodBar = (
-    <div className="flex flex-wrap items-center gap-2">
-      {PRESETS.map((p) => (
-        <Button
-          key={p.value}
-          size="sm"
-          variant={preset === p.value ? "default" : "outline"}
-          onClick={() => setPreset(p.value)}
-        >
-          {p.label}
-        </Button>
-      ))}
-      {preset === "custom" && (
-        <div className="flex items-center gap-2">
-          <Input type="date" className="h-8 w-40" value={customFrom} max={customTo} onChange={(e) => setCustomFrom(e.target.value)} />
-          <span className="text-muted-foreground text-sm">to</span>
-          <Input type="date" className="h-8 w-40" value={customTo} min={customFrom} onChange={(e) => setCustomTo(e.target.value)} />
-        </div>
-      )}
-      {!rangeValid && <span className="text-xs text-red-600">Pick a valid date range</span>}
-    </div>
+  // Profit per period as bars: the longest bar is the biggest profit (or loss).
+  const periodMax = useMemo(
+    () => Math.max(1, ...(breakdown?.periods ?? []).map((p) => Math.abs(Number(p.profit)))),
+    [breakdown],
   );
+
+  const products = useMemo(() => {
+    const term = productSearch.trim().toLowerCase();
+    const rows = (breakdown?.products ?? []).filter((p) => !term || p.drugName.toLowerCase().includes(term));
+    const profit = (p: { profit: string }) => Number(p.profit);
+    return [...rows].sort((a, b) => {
+      if (productSort === "least") return profit(a) - profit(b);
+      if (productSort === "loss") {
+        const aLoss = profit(a) < 0;
+        const bLoss = profit(b) < 0;
+        if (aLoss !== bLoss) return aLoss ? -1 : 1;
+        return aLoss ? profit(a) - profit(b) : profit(b) - profit(a);
+      }
+      return profit(b) - profit(a);
+    });
+  }, [breakdown, productSearch, productSort]);
+  const lossCount = (breakdown?.products ?? []).filter((p) => Number(p.profit) < 0).length;
+
+  if (!canSeeProfit) {
+    return (
+      <div className="space-y-2">
+        <h2 className="text-2xl font-bold tracking-tight text-foreground">Analytics</h2>
+        <p className="text-muted-foreground">Only the owner or a manager can see money and profit here.</p>
+      </div>
+    );
+  }
+
+  const moneyCards = [
+    {
+      title: "Sales",
+      value: breakdown ? tzs(breakdown.revenue) : "—",
+      help: "All the money customers paid (voided sales not counted).",
+      icon: ShoppingCart,
+      color: "text-blue-600",
+      bg: "bg-blue-50 dark:bg-blue-950/30",
+    },
+    {
+      title: "Cost of drugs",
+      value: breakdown ? tzs(breakdown.cost) : "—",
+      help: "What you paid your supplier for the drugs that were sold.",
+      icon: Package,
+      color: "text-orange-600",
+      bg: "bg-orange-50 dark:bg-orange-950/30",
+    },
+    {
+      title: "Profit",
+      value: breakdown ? tzs(breakdown.profit) : "—",
+      valueClass: breakdown ? profitClass(breakdown.profit) : "",
+      help: breakdown?.marginPct != null
+        ? `Sales − cost of drugs. You keep ${pct(breakdown.marginPct)} of every sale.`
+        : "Sales − cost of drugs.",
+      icon: Wallet,
+      color: "text-emerald-600",
+      bg: "bg-emerald-50 dark:bg-emerald-950/30",
+    },
+  ];
 
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h2 className="text-2xl font-bold tracking-tight text-foreground">Analytics & Insights</h2>
+          <h2 className="text-2xl font-bold tracking-tight text-foreground">Analytics</h2>
           <p className="text-muted-foreground text-sm mt-1">
-            Sales and profit — {scopeLabel}
+            How much you sold and how much you earned — {scopeLabel}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -233,63 +235,245 @@ export default function AnalyticsPage({ params }: PageProps) {
         </div>
       </div>
 
-      {/* Today's numbers */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {summaryStats.map((s) => (
-          <Card key={s.title}>
-            <CardContent className="flex items-center gap-4 p-5">
-              <div className={`flex items-center justify-center w-10 h-10 rounded-lg ${s.bg}`}>
-                <s.icon className={`h-5 w-5 ${s.color}`} />
-              </div>
-              <div className="min-w-0">
-                <p className="text-sm text-muted-foreground">{s.title}</p>
-                <p className={`text-xl font-bold text-foreground ${s.valueClass ?? ""}`}>{s.value}</p>
-                {s.detail && (
-                  <p className={`text-xs ${s.detail.up ? "text-green-600" : "text-red-600"} flex items-center gap-1 mt-0.5`}>
-                    {s.detail.up ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />}
-                    {s.detail.text}
-                  </p>
-                )}
-                {s.note && <p className="text-xs text-muted-foreground mt-0.5">{s.note}</p>}
-              </div>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
-
-      {/* Alert badges */}
-      {summary?.alerts && (
-        <div className="flex flex-wrap gap-3">
-          {summary.alerts.criticalReorderCount > 0 && (
-            <Badge variant="destructive" className="py-1 px-3">
-              {summary.alerts.criticalReorderCount} critical reorders
-            </Badge>
-          )}
-          {summary.alerts.marginLeakageCount > 0 && (
-            <Badge variant="destructive" className="py-1 px-3">
-              {summary.alerts.marginLeakageCount} sold below cost today
-            </Badge>
-          )}
-          {summary.alerts.discountAbuseCount > 0 && (
-            <Badge variant="secondary" className="py-1 px-3">
-              {summary.alerts.discountAbuseCount} heavily discounted sales today
-            </Badge>
-          )}
+      {/* ── Money ─────────────────────────────────────────────────────────── */}
+      <section className="space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="text-lg font-semibold flex items-center gap-2">
+            <DollarSign className="h-5 w-5 text-emerald-600" />
+            Money
+          </h3>
+          <button
+            type="button"
+            onClick={() => setShowHelp((v) => !v)}
+            className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+            aria-expanded={showHelp}
+          >
+            <HelpCircle className="h-4 w-4" />
+            How is profit worked out?
+          </button>
         </div>
-      )}
+        {showHelp && (
+          <div className="rounded-lg border bg-muted/40 p-3 text-sm space-y-1">
+            <p><strong>Profit = Sales − buying price of what was sold.</strong></p>
+            <p className="text-muted-foreground">
+              Example: you sell a box for TZS 3,000 that you bought for TZS 2,000 → profit is TZS 1,000.
+              Rent, salaries and other expenses are not taken out here. If a drug has no buying price saved,
+              its profit will look too high — add the buying price on the Drugs page.
+            </p>
+          </div>
+        )}
+
+        <PeriodPicker
+          presets={MONEY_PRESETS}
+          preset={preset}
+          onPresetChange={setPreset}
+          custom={custom}
+          onCustomChange={setCustom}
+        />
+        {rangeValid && <p className="text-sm text-muted-foreground">{rangeLabel(range)}</p>}
+        {breakdownError && (
+          <p className="text-sm text-red-600">Could not load the money numbers. Check your connection and try again.</p>
+        )}
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          {moneyCards.map((c) => (
+            <Card key={c.title}>
+              <CardContent className="flex items-start gap-4 p-5">
+                <div className={`flex shrink-0 items-center justify-center w-10 h-10 rounded-lg ${c.bg}`}>
+                  <c.icon className={`h-5 w-5 ${c.color}`} />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-sm text-muted-foreground">{c.title}</p>
+                  <p className={cn("text-2xl font-bold text-foreground tabular-nums break-words", c.valueClass, breakdownLoading && "opacity-50")}>
+                    {c.value}
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-1">{c.help}</p>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+
+        {/* Warnings for today */}
+        {summary?.alerts && (
+          <div className="flex flex-wrap gap-3">
+            {summary.alerts.marginLeakageCount > 0 && (
+              <Badge variant="destructive" className="py-1 px-3">
+                Today: {summary.alerts.marginLeakageCount} item{summary.alerts.marginLeakageCount === 1 ? "" : "s"} sold below buying price
+              </Badge>
+            )}
+            {summary.alerts.discountAbuseCount > 0 && (
+              <Badge variant="secondary" className="py-1 px-3">
+                Today: {summary.alerts.discountAbuseCount} sale{summary.alerts.discountAbuseCount === 1 ? "" : "s"} with a big discount
+              </Badge>
+            )}
+            {summary.alerts.criticalReorderCount > 0 && (
+              <Badge variant="destructive" className="py-1 px-3">
+                {summary.alerts.criticalReorderCount} drug{summary.alerts.criticalReorderCount === 1 ? "" : "s"} must be reordered now
+              </Badge>
+            )}
+          </div>
+        )}
+
+        {/* Profit by day / week / month */}
+        <Card>
+          <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 space-y-0">
+            <CardTitle className="text-base">Profit by {GROUPS.find((g) => g.value === group)?.label.toLowerCase()}</CardTitle>
+            <div className="flex rounded-md border border-input p-0.5 text-sm">
+              {GROUPS.map((g) => (
+                <button
+                  key={g.value}
+                  type="button"
+                  onClick={() => setGroup(g.value)}
+                  className={cn(
+                    "rounded px-3 py-1 font-medium transition-colors",
+                    group === g.value ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {g.label}
+                </button>
+              ))}
+            </div>
+          </CardHeader>
+          <CardContent>
+            {breakdownLoading ? (
+              <p className="py-6 text-center text-sm text-muted-foreground">Loading…</p>
+            ) : !breakdown?.periods.length ? (
+              <p className="py-6 text-center text-sm text-muted-foreground">No sales in this period</p>
+            ) : (
+              <ul className="space-y-3">
+                {breakdown.periods.map((p) => {
+                  const profit = Number(p.profit);
+                  return (
+                    <li key={p.period} className="space-y-1">
+                      <div className="flex flex-wrap items-baseline justify-between gap-x-3 text-sm">
+                        <span className="font-medium">{periodLabel(p)}</span>
+                        <span className={cn("font-semibold tabular-nums", profitClass(profit))}>{tzs(profit)}</span>
+                      </div>
+                      <div className="h-2.5 w-full rounded-full bg-muted overflow-hidden">
+                        <div
+                          className={cn("h-full rounded-full", profit < 0 ? "bg-red-500" : "bg-emerald-500")}
+                          style={{ width: `${Math.max(2, (Math.abs(profit) / periodMax) * 100)}%` }}
+                        />
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        {p.salesCount} sale{p.salesCount === 1 ? "" : "s"} · sold {tzs(p.revenue)} · cost {tzs(p.cost)}
+                      </p>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Profit by product */}
+        <Card>
+          <CardHeader className="space-y-3">
+            <CardTitle className="text-base">Profit by product</CardTitle>
+            <p className="text-sm text-muted-foreground">
+              Which drug earned you what.
+              {lossCount > 0 && (
+                <span className="ml-1 font-medium text-red-600">
+                  {lossCount} product{lossCount === 1 ? " was" : "s were"} sold at a loss.
+                </span>
+              )}
+            </p>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <div className="relative flex-1 sm:max-w-xs">
+                <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                <Input
+                  placeholder="Find a product…"
+                  className="pl-8"
+                  value={productSearch}
+                  onChange={(e) => setProductSearch(e.target.value)}
+                />
+              </div>
+              <select
+                aria-label="Sort products"
+                className="h-9 rounded-md border border-input bg-transparent px-3 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
+                value={productSort}
+                onChange={(e) => setProductSort(e.target.value as ProductSort)}
+              >
+                <option value="most">Most profit first</option>
+                <option value="least">Least profit first</option>
+                <option value="loss">Loss-making first</option>
+              </select>
+            </div>
+          </CardHeader>
+          <CardContent className="p-0">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Product</TableHead>
+                  <TableHead className="text-right">Units sold</TableHead>
+                  <TableHead className="text-right">Sales</TableHead>
+                  <TableHead className="text-right">Profit</TableHead>
+                  <TableHead className="text-right">Margin</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {breakdownLoading ? (
+                  <TableRow>
+                    <TableCell colSpan={5} className="text-center text-muted-foreground py-8">Loading…</TableCell>
+                  </TableRow>
+                ) : products.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={5} className="text-center text-muted-foreground py-8">
+                      {productSearch.trim() ? `No product matches “${productSearch.trim()}”` : "No products sold in this period"}
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  products.map((p) => {
+                    const loss = Number(p.profit) < 0;
+                    return (
+                      <TableRow key={p.drugId} className={loss ? "bg-red-50/60 dark:bg-red-950/20" : undefined}>
+                        <TableCell className="font-medium">
+                          <span className="flex items-center gap-1">
+                            {loss && <TrendingDown className="h-3.5 w-3.5 shrink-0 text-red-600" />}
+                            {p.drugName}
+                          </span>
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums whitespace-nowrap">
+                          {Number(p.unitsSold).toLocaleString()} <span className="text-xs text-muted-foreground">{p.unit ?? ""}</span>
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums whitespace-nowrap">{tzs(p.revenue)}</TableCell>
+                        <TableCell className={cn("text-right tabular-nums font-semibold whitespace-nowrap", profitClass(p.profit))}>
+                          {tzs(p.profit)}
+                        </TableCell>
+                        <TableCell className={cn("text-right tabular-nums", loss && "text-red-600")}>
+                          {p.marginPct == null ? "—" : pct(p.marginPct)}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })
+                )}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+        <p className="text-xs text-muted-foreground">
+          Margin = profit ÷ sales. A margin of 25% means you keep TZS 250 of every TZS 1,000 sold.
+        </p>
+      </section>
 
       {/* Detail Tabs */}
+      <div className="space-y-1">
+        <h3 className="text-lg font-semibold">More details</h3>
+        <p className="text-sm text-muted-foreground">
+          Branches, sellers and losses use the period chosen at the top. Dead stock looks at the last 60 days.
+        </p>
+      </div>
       <Tabs value={tab} onValueChange={setTab}>
-        <TabsList>
+        <TabsList className="h-auto flex-wrap">
           <TabsTrigger value="branches">By Branch</TabsTrigger>
           <TabsTrigger value="sellers">By Seller</TabsTrigger>
           <TabsTrigger value="dead-stock">Dead Stock</TabsTrigger>
-          <TabsTrigger value="margins">Margin Leakage</TabsTrigger>
+          <TabsTrigger value="margins">Sold at a loss</TabsTrigger>
         </TabsList>
 
         {/* By Branch */}
         <TabsContent value="branches" className="mt-4 space-y-4">
-          {periodBar}
           <Card>
             <CardHeader>
               <CardTitle className="text-base flex items-center gap-2">
@@ -357,14 +541,13 @@ export default function AnalyticsPage({ params }: PageProps) {
             </CardContent>
           </Card>
           <p className="text-xs text-muted-foreground">
-            Profit = revenue minus the buying price of the items sold. Branch comparison always shows every branch;
-            the branch selector above does not filter it.
+            Profit = sales minus the buying price of the items sold. This table always shows every branch;
+            the branch selector at the top does not filter it.
           </p>
         </TabsContent>
 
         {/* By Seller */}
         <TabsContent value="sellers" className="mt-4 space-y-4">
-          {periodBar}
           <Card>
             <CardHeader>
               <CardTitle className="text-base flex items-center gap-2">
@@ -474,12 +657,11 @@ export default function AnalyticsPage({ params }: PageProps) {
 
         {/* Margin Leakage */}
         <TabsContent value="margins" className="mt-4 space-y-4">
-          {periodBar}
           <Card>
             <CardHeader>
               <CardTitle className="text-base flex items-center gap-2">
                 <DollarSign className="h-4 w-4 text-orange-500" />
-                Margin Leakage — Items Sold At or Below Cost
+                Sold at a loss — items sold at or below their buying price
               </CardTitle>
             </CardHeader>
             <CardContent>
