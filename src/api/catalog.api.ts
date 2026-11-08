@@ -15,6 +15,10 @@ export const catalogApi = {
   byBarcode: (pharmacyId: string, barcode: string) =>
     api.get<CatalogItem>(`${base(pharmacyId)}/barcode/${encodeURIComponent(barcode)}`).then((r) => r.data),
 
+  /** Active catalog items this pharmacy does not have yet; `total` is the "N new medicines" number. */
+  newForMe: (pharmacyId: string, params?: { search?: string; kind?: CatalogKind; category?: string; page?: number; size?: number }) =>
+    api.get<Page<CatalogItem> & { total: number }>(`${base(pharmacyId)}/new-for-me`, { params }).then((r) => r.data),
+
   /** Copies catalog items into the pharmacy's own drug list, at the pharmacy's own prices. */
   add: (pharmacyId: string, items: AddFromCatalogEntry[]) =>
     api.post<AddFromCatalogResult>(`${base(pharmacyId)}/add`, { items }).then((r) => r.data),
