@@ -18,3 +18,4 @@ export * from "./analytics.api";
 export * from "./billing.api";
 export * from "./pos.api";
 export * from "./expense.api";
+export * from "./insights.api";
