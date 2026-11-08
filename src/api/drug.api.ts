@@ -8,6 +8,15 @@ import type {
   CategoryResponse,
   CreateCategoryRequest,
   UpdateCategoryRequest,
+  DrugListParams,
+  DrugBulkChanges,
+  DrugBulkResult,
+  DrugPriceRow,
+  DuplicatesResponse,
+  SimilarDrug,
+  MergeDrugsResult,
+  FromCatalogRequest,
+  FromCatalogResult,
 } from "@/types";
 
 /**
@@ -28,10 +37,45 @@ export const drugApi = {
   create: (pharmacyId: string, data: CreateDrugRequest) =>
     api.post<DrugResponse>(`/api/v1/pharmacies/${pharmacyId}/drugs`, data).then((r) => normalizeDrug(r.data)),
 
-  list: (pharmacyId: string, params?: { page?: number; size?: number; search?: string }) =>
+  list: (pharmacyId: string, params?: DrugListParams) =>
     api
       .get<Page<DrugResponse>>(`/api/v1/pharmacies/${pharmacyId}/drugs`, { params })
       .then((r) => ({ ...r.data, content: r.data.content.map(normalizeDrug) })),
+
+  /** Same change for many drugs at once (Owner/Manager). */
+  bulkUpdate: (pharmacyId: string, ids: string[], changes: DrugBulkChanges) =>
+    api.post<DrugBulkResult>(`/api/v1/pharmacies/${pharmacyId}/drugs/bulk-update`, { ids, changes }).then((r) => r.data),
+
+  /** Own price per drug, many drugs at once (Owner/Manager). */
+  bulkPrices: (pharmacyId: string, rows: DrugPriceRow[]) =>
+    api.post<DrugBulkResult>(`/api/v1/pharmacies/${pharmacyId}/drugs/bulk-prices`, { rows }).then((r) => r.data),
+
+  duplicates: (pharmacyId: string) =>
+    api.get<DuplicatesResponse>(`/api/v1/pharmacies/${pharmacyId}/drugs/duplicates`).then((r) => r.data),
+
+  /** Drugs that look like the one about to be created (never blocks creating). */
+  similar: (pharmacyId: string, params: { name?: string; brand?: string; barcode?: string }) =>
+    api.get<SimilarDrug[]>(`/api/v1/pharmacies/${pharmacyId}/drugs/similar`, { params }).then((r) => r.data),
+
+  /** Moves stock and history of `mergeIds` into `keepId`; the merged drugs are switched off. */
+  merge: (pharmacyId: string, keepId: string, mergeIds: string[]) =>
+    api
+      .post<MergeDrugsResult>(`/api/v1/pharmacies/${pharmacyId}/drugs/${keepId}/merge`, { mergeIds })
+      .then((r) => r.data),
+
+  /** Bulk add from the shared catalog with one optional price and optional opening stock. */
+  fromCatalog: (pharmacyId: string, data: FromCatalogRequest) =>
+    api.post<FromCatalogResult>(`/api/v1/pharmacies/${pharmacyId}/drugs/from-catalog`, data).then((r) => r.data),
+
+  /** CSV of the list with the same filters (paging ignored). */
+  exportCsv: (pharmacyId: string, type: "full" | "prices", params: DrugListParams) =>
+    api
+      .get<Blob>(`/api/v1/pharmacies/${pharmacyId}/drugs/export`, {
+        // Paging is left out: the file holds every matching drug.
+        params: { ...params, page: undefined, size: undefined, format: "csv", type },
+        responseType: "blob",
+      })
+      .then((r) => r.data),
 
   getById: (pharmacyId: string, drugId: string) =>
     api.get<DrugResponse>(`/api/v1/pharmacies/${pharmacyId}/drugs/${drugId}`).then((r) => normalizeDrug(r.data)),
