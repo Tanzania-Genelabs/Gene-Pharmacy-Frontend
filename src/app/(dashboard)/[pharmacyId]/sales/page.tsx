@@ -26,7 +26,8 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { canSplitPack, formatQuantity, hasPacks, packInfo, packLabel, type PackInfo } from "@/lib/packs";
 import { cn } from "@/lib/utils";
-import type { DrugResponse, SaleResponse, SaleSummaryResponse, SaleStatus, SalePaymentMethod, CreateSaleRequest, SalesDayRow } from "@/types";
+import { SALE_PAYMENT_PROVIDERS, salePaymentProviderLabel } from "@/types";
+import type { SalePaymentProvider, DrugResponse, SaleResponse, SaleSummaryResponse, SaleStatus, SalePaymentMethod, CreateSaleRequest, SalesDayRow } from "@/types";
 
 interface PageProps { params: Promise<{ pharmacyId: string }> }
 
@@ -145,7 +146,16 @@ function SalesTable({ sales, loading, emptyText, isSeller, onView, onVoid }: Sal
                 <TableCell className="text-sm text-muted-foreground">{sale.branchName ?? `${sale.branchId.slice(0, 8)}…`}</TableCell>
                 <TableCell><SaleItemsCell sale={sale} /></TableCell>
                 <TableCell className="tabular-nums font-medium text-sm">TZS {fmt(Number(sale.netAmount))}</TableCell>
-                <TableCell><Badge variant="outline" className="text-xs">{sale.paymentMethod}</Badge></TableCell>
+                <TableCell>
+                  <Badge variant="outline" className="text-xs">{sale.paymentMethod}</Badge>
+                  {(sale.paymentProvider || sale.paymentReference) && (
+                    <div className="mt-0.5 text-[11px] text-muted-foreground">
+                      {sale.paymentProvider ? salePaymentProviderLabel(sale.paymentProvider) : ""}
+                      {sale.paymentProvider && sale.paymentReference ? " · " : ""}
+                      <span className="font-mono">{sale.paymentReference}</span>
+                    </div>
+                  )}
+                </TableCell>
                 <TableCell><Badge variant={STATUS_VARIANT[sale.status] ?? "secondary"} className="text-xs">{sale.status}</Badge></TableCell>
                 <TableCell className="text-xs text-muted-foreground">{fmtDate(sale.saleDate)}</TableCell>
                 <TableCell>
@@ -187,6 +197,8 @@ function ReceiptContent({ sale, drugNames }: { sale: SaleResponse; drugNames?: R
           ["Receipt #", sale.receiptNumber],
           ["Date", fmtDate(sale.saleDate)],
           ["Payment", sale.paymentMethod],
+          ...(sale.paymentProvider ? [["Network", salePaymentProviderLabel(sale.paymentProvider)]] : []),
+          ...(sale.paymentReference ? [["Reference", sale.paymentReference]] : []),
           ...(sale.notes ? [["Note", sale.notes]] : []),
         ].map(([k, v]) => (
           <div key={k} className="flex justify-between gap-2">
@@ -271,6 +283,11 @@ export default function SalesPage({ params }: PageProps) {
   };
   const [paymentMethod, setPaymentMethod] = useState<SalePaymentMethod>("Cash");
   const [notes, setNotes] = useState("");
+  const [paymentProvider, setPaymentProvider] = useState<SalePaymentProvider | "">("");
+  const [paymentReference, setPaymentReference] = useState("");
+  // "Find by payment reference" on the history tab: typed text, and the search that is applied.
+  const [refInput, setRefInput] = useState("");
+  const [refQuery, setRefQuery] = useState("");
   const [amountPaid, setAmountPaid] = useState<string>("");
   const [search, setSearch] = useState("");
   const [selectedCatId, setSelectedCatId] = useState("all");
@@ -325,9 +342,12 @@ export default function SalesPage({ params }: PageProps) {
   });
   // The receipts themselves, 200 at a time.
   const historyQuery = useInfiniteQuery({
-    queryKey: ["sales", pharmacyId, "history", histInstants?.from, histInstants?.to, histBranchParam ?? "all"],
+    queryKey: ["sales", pharmacyId, "history", histInstants?.from, histInstants?.to, histBranchParam ?? "all", refQuery],
     queryFn: ({ pageParam }) =>
-      salesApi.list(pharmacyId, { page: pageParam, size: 200, from: histInstants!.from, to: histInstants!.to, branchId: histBranchParam }),
+      // A reference search looks through all dates.
+      salesApi.list(pharmacyId, refQuery
+        ? { page: pageParam, size: 200, branchId: histBranchParam, paymentReference: refQuery }
+        : { page: pageParam, size: 200, from: histInstants!.from, to: histInstants!.to, branchId: histBranchParam }),
     initialPageParam: 0,
     getNextPageParam: (last) => (last.last || last.number + 1 >= last.totalPages ? undefined : last.number + 1),
     enabled: tab === "history" && !!histInstants,
@@ -454,13 +474,14 @@ export default function SalesPage({ params }: PageProps) {
     mutationFn: (data: CreateSaleRequest) => salesApi.create(pharmacyId, data),
     onSuccess: (sale) => {
       toast.success(`Sale ${sale.receiptNumber} completed!`);
+      if (sale.warnings?.includes("PAYMENT_REFERENCE_REUSED")) toast.warning("This payment reference was already used on another sale in the last 30 days.");
       qc.invalidateQueries({ queryKey: ["inventory", pharmacyId] });
       // Build drug name map from cart for receipt display
       const names: Record<string, string> = {};
       cart.forEach((i) => { names[i.drugId] = i.drugName; });
       setReceiptDrugNames(names);
       setReceiptSale(sale);
-      setCart([]); setNotes(""); setAmountPaid("");
+      setCart([]); setNotes(""); setAmountPaid(""); setPaymentReference("");
       qc.invalidateQueries({ queryKey: ["sales", pharmacyId] });
     },
     onError: (err: unknown) => {
@@ -506,6 +527,9 @@ export default function SalesPage({ params }: PageProps) {
       soldBy: user.id,
       receiptNumber: generateReceiptNumber(),
       paymentMethod,
+      ...(paymentMethod === "MobileMoney" && paymentProvider ? { paymentProvider } : {}),
+      ...((["MobileMoney", "Card", "Insurance"] as SalePaymentMethod[]).includes(paymentMethod) && paymentReference.trim()
+        ? { paymentReference: paymentReference.trim().slice(0, 60) } : {}),
       amountPaid: paid,
       notes: notes.trim() || undefined,
       items: cart.map((i) => ({
@@ -757,6 +781,35 @@ export default function SalesPage({ params }: PageProps) {
               </div>
             </div>
 
+            {(paymentMethod === "MobileMoney" || paymentMethod === "Card" || paymentMethod === "Insurance") && (
+              <div className="space-y-1.5 flex-shrink-0">
+                {paymentMethod === "MobileMoney" && (
+                  <div className="flex flex-wrap gap-1">
+                    {SALE_PAYMENT_PROVIDERS.map((o) => (
+                      <button
+                        key={o.value}
+                        type="button"
+                        onClick={() => setPaymentProvider(paymentProvider === o.value ? "" : o.value)}
+                        className={cn(
+                          "rounded-full border px-2.5 py-1 text-xs font-medium transition-colors",
+                          paymentProvider === o.value ? "bg-primary text-primary-foreground border-primary" : "hover:bg-accent",
+                        )}
+                      >
+                        {o.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <Input
+                  placeholder="Payment reference (optional)"
+                  maxLength={60}
+                  className="h-8 text-xs"
+                  value={paymentReference}
+                  onChange={(e) => setPaymentReference(e.target.value)}
+                />
+              </div>
+            )}
+
             {/* Cart items */}
             <div className="flex-1 overflow-y-auto space-y-2 pr-1">
               {cart.length === 0 ? (
@@ -990,6 +1043,27 @@ export default function SalesPage({ params }: PageProps) {
             </div>
           </div>
 
+          <form
+            className="flex items-center gap-2"
+            onSubmit={(e) => { e.preventDefault(); setRefQuery(refInput.trim()); }}
+          >
+            <Input
+              placeholder="Find by payment reference"
+              aria-label="Find by payment reference"
+              className="h-9 max-w-xs"
+              maxLength={60}
+              value={refInput}
+              onChange={(e) => setRefInput(e.target.value)}
+            />
+            <Button type="submit" variant="outline" size="sm" className="h-9">Find</Button>
+            {refQuery && (
+              <Button type="button" variant="ghost" size="sm" className="h-9" onClick={() => { setRefInput(""); setRefQuery(""); }}>
+                Clear
+              </Button>
+            )}
+          </form>
+          {refQuery && <p className="text-sm text-muted-foreground">Showing sales with payment reference “{refQuery}” (all dates).</p>}
+
           {histRangeValid && (
             <>
               {/* Summary for the whole period */}
@@ -1028,9 +1102,9 @@ export default function SalesPage({ params }: PageProps) {
             </>
           )}
 
-          {!histRangeValid ? null : historyQuery.isLoading || (histByDay && histDaysLoading) ? (
+          {!histRangeValid ? null : historyQuery.isLoading || (histByDay && !refQuery && histDaysLoading) ? (
             <SalesTable sales={undefined} loading emptyText="" isSeller={isSeller} onView={viewDetail} onVoid={() => {}} />
-          ) : !histByDay ? (
+          ) : (!histByDay || !!refQuery) ? (
             <SalesTable
               sales={histSales}
               loading={false}
