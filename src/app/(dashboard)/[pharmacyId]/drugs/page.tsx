@@ -2,145 +2,191 @@
 
 import { use, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { drugApi, drugCategoryApi } from "@/api/drug.api";
+import { useQuery, useMutation, useQueryClient, type QueryKey } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Plus, Search, Upload, Pill, MoreHorizontal, AlertTriangle, Library, Download } from "lucide-react";
+import { ChevronDown, Copy, Download, Library, PencilLine, Plus, Search, Upload } from "lucide-react";
+import { drugApi, drugCategoryApi } from "@/api/drug.api";
+import { catalogApi } from "@/api/catalog.api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Card, CardContent } from "@/components/ui/card";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-} from "@/components/ui/dialog";
-import { apiErrorMessage } from "@/lib/errors";
-import { UNIT_OPTIONS } from "@/lib/drug-units";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { CatalogPickerDialog } from "@/components/catalog/catalog-picker-dialog";
-import type { CreateDrugRequest, DrugResponse, UpdateDrugRequest } from "@/types";
+import { downloadBlob } from "@/components/expenses/format";
+import { DrugFormDialog } from "@/components/drugs/drug-form-dialog";
+import { DrugTable, type PriceField } from "@/components/drugs/drug-table";
+import { DrugFilterBar, NO_FILTERS, filterParams, type DrugFilters } from "@/components/drugs/drug-filters";
+import { BulkActionBar } from "@/components/drugs/bulk-action-bar";
+import { FillPricesPanel } from "@/components/drugs/fill-prices-panel";
+import { DuplicatesDialog, duplicatesKey } from "@/components/drugs/duplicates-dialog";
+import { CatalogAddDialog, newForMeKey } from "@/components/drugs/catalog-add-dialog";
+import { skipReasonLabel } from "@/components/drugs/format";
+import { apiErrorMessage } from "@/lib/errors";
+import { ymd } from "@/lib/periods";
+import { useDebounced } from "@/lib/use-debounced";
+import { useAuthStore } from "@/store/auth.store";
+import type { DrugResponse, DrugSort, Page } from "@/types";
 
 interface PageProps {
   params: Promise<{ pharmacyId: string }>;
 }
 
-const selectClass =
-  "flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring";
-
-/** Form fields are text so they can be emptied while typing; they are converted on submit. */
-interface DrugForm {
-  name: string;
-  brand: string;
-  genericName: string;
-  barcode: string;
-  categoryId: string;
-  unit: string;
-  unitsPerPack: string;
-  packUnit: string;
-  sellingPrice: string;
-  allowsHalfDose: boolean;
-  /** Empty means half of the selling price; type a higher number to add something on top. */
-  halfDosePrice: string;
-  buyingPrice: string;
-  reorderLevel: string;
-  requiresPrescription: boolean;
-}
-
-const emptyForm = (): DrugForm => ({
-  name: "", brand: "", genericName: "", barcode: "", categoryId: "", unit: "tablet",
-  unitsPerPack: "1", packUnit: "",
-  sellingPrice: "", allowsHalfDose: false, halfDosePrice: "", buyingPrice: "", reorderLevel: "10", requiresPrescription: false,
-});
-
-const formFromDrug = (drug: DrugResponse): DrugForm => ({
-  name: drug.name,
-  brand: drug.brand ?? "",
-  genericName: drug.genericName ?? "",
-  barcode: drug.barcode ?? "",
-  categoryId: drug.categoryId ?? "",
-  unit: drug.unit,
-  unitsPerPack: String(drug.unitsPerPack ?? 1),
-  packUnit: drug.packUnit ?? "",
-  sellingPrice: String(drug.sellingPrice),
-  allowsHalfDose: drug.allowsHalfDose ?? false,
-  halfDosePrice: drug.halfDosePrice == null ? "" : String(drug.halfDosePrice),
-  buyingPrice: drug.buyingPrice === null ? "" : String(drug.buyingPrice),
-  reorderLevel: String(drug.reorderLevel),
-  requiresPrescription: drug.requiresPrescription,
-});
+const PAGE_SIZE = 50;
 
 export default function DrugsPage({ params }: PageProps) {
   const { pharmacyId } = use(params);
   const qc = useQueryClient();
-  const [search, setSearch] = useState("");
+  const role = useAuthStore((s) => s.user?.role);
+  // Sellers get a read-only list without buying prices or profit.
+  const canManage = role === "Owner" || role === "Manager" || role === "SuperAdmin";
+
+  const [searchInput, setSearchInput] = useState("");
+  const search = useDebounced(searchInput.trim(), 300);
+  const [filters, setFilters] = useState<DrugFilters>(NO_FILTERS);
   const [page, setPage] = useState(0);
+  const [sort, setSort] = useState<DrugSort>("name");
+  const [direction, setDirection] = useState<"asc" | "desc">("asc");
+  const [selected, setSelected] = useState<Record<string, DrugResponse>>({});
+  const [fillMode, setFillMode] = useState<PriceField | null>(null);
+
   // One dialog serves both: `editing` is the drug being changed, or null when adding a new one.
-  // The catalog picker can be opened straight away with a barcode (?catalog=...) when the till
-  // scanned a product this pharmacy doesn't have yet.
-  const catalogParam = useSearchParams().get("catalog");
-  const [showCatalog, setShowCatalog] = useState(!!catalogParam);
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<DrugResponse | null>(null);
-  const [form, setForm] = useState<DrugForm>(emptyForm());
+  // The per-item catalog picker can be opened straight away with a barcode (?catalog=...) when the
+  // till scanned a product this pharmacy doesn't have yet.
+  const catalogParam = useSearchParams().get("catalog");
+  const [showCatalogPicker, setShowCatalogPicker] = useState(!!catalogParam);
+  const [showCatalogAdd, setShowCatalogAdd] = useState(false);
+  const [showDuplicates, setShowDuplicates] = useState(false);
 
-  const { data, isLoading } = useQuery({
-    queryKey: ["drugs", pharmacyId, page, search],
-    queryFn: () => drugApi.list(pharmacyId, { page, size: 20, search: search || undefined }),
+  const listParams = { ...filterParams(filters, search), page, size: PAGE_SIZE, sort, direction };
+  const listKey: QueryKey = ["drugs", pharmacyId, "list", listParams];
+
+  const { data, isLoading, isFetching } = useQuery({
+    queryKey: listKey,
+    queryFn: () => drugApi.list(pharmacyId, listParams),
     placeholderData: (prev) => prev,
   });
+  const drugs = data?.content ?? [];
 
   const { data: categories } = useQuery({
     queryKey: ["drug-categories", pharmacyId],
     queryFn: () => drugCategoryApi.list(pharmacyId),
   });
-  const activeCategories = (categories ?? []).filter((c) => c.active || c.id === form.categoryId);
 
+  const { data: attention } = useQuery({
+    queryKey: ["drugs", pharmacyId, "attention-count"],
+    queryFn: () => drugApi.list(pharmacyId, { status: "active", needsAttention: 1, size: 1 }),
+    enabled: canManage,
+  });
+  const { data: duplicates } = useQuery({
+    queryKey: duplicatesKey(pharmacyId),
+    queryFn: () => drugApi.duplicates(pharmacyId),
+    enabled: canManage,
+    staleTime: 5 * 60_000,
+  });
+  const { data: newForMe } = useQuery({
+    queryKey: [...newForMeKey(pharmacyId), "count"],
+    queryFn: () => catalogApi.newForMe(pharmacyId, { size: 1 }),
+    enabled: canManage,
+    staleTime: 5 * 60_000,
+  });
+
+  // ── Filters, sorting, paging: every change goes back to the first page ──
+  function changeFilters(next: DrugFilters) {
+    setFilters(next);
+    setPage(0);
+    if (fillMode === "buyingPrice" && next.quick !== "noBuying") setFillMode(null);
+    if (fillMode === "sellingPrice" && next.quick !== "noSelling") setFillMode(null);
+  }
+  function clearFilters() {
+    setSearchInput("");
+    changeFilters(NO_FILTERS);
+  }
+  function changeSort(column: DrugSort) {
+    if (sort === column) {
+      setDirection((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSort(column);
+      // Names A→Z; numbers biggest first.
+      setDirection(column === "name" ? "asc" : "desc");
+    }
+    setPage(0);
+  }
+  function startFill(field: PriceField) {
+    setFillMode(field);
+    setFilters((f) => (field === "buyingPrice" ? { ...f, quick: "noBuying" } : { ...f, quick: "noSelling", showInactive: true }));
+    setPage(0);
+  }
+
+  // ── Selection ──
+  function toggleRow(drug: DrugResponse) {
+    setSelected((cur) => {
+      const next = { ...cur };
+      if (next[drug.id]) delete next[drug.id];
+      else next[drug.id] = drug;
+      return next;
+    });
+  }
+  function togglePage() {
+    const all = drugs.length > 0 && drugs.every((d) => selected[d.id]);
+    setSelected((cur) => {
+      const next = { ...cur };
+      for (const d of drugs) {
+        if (all) delete next[d.id];
+        else next[d.id] = d;
+      }
+      return next;
+    });
+  }
+
+  // ── Dialog ──
+  function openAdd() {
+    setEditing(null);
+    setShowForm(true);
+  }
+  function openEdit(drug: DrugResponse) {
+    setEditing(drug);
+    setShowForm(true);
+  }
   function closeForm() {
     setShowForm(false);
     setEditing(null);
-    setForm(emptyForm());
+  }
+  async function openExisting(drugId: string) {
+    try {
+      openEdit(await drugApi.getById(pharmacyId, drugId));
+    } catch (err) {
+      toast.error(apiErrorMessage(err, "Could not open that drug"));
+    }
   }
 
-  function openAdd() {
-    setEditing(null);
-    setForm(emptyForm());
-    setShowForm(true);
-  }
-
-  function openEdit(drug: DrugResponse) {
-    setEditing(drug);
-    setForm(formFromDrug(drug));
-    setShowForm(true);
-  }
-
-  const saveMutation = useMutation({
-    mutationFn: (payload: { create?: CreateDrugRequest; update?: UpdateDrugRequest }) =>
-      editing && payload.update
-        ? drugApi.update(pharmacyId, editing.id, payload.update)
-        : drugApi.create(pharmacyId, payload.create!),
-    onSuccess: (saved) => {
-      toast.success(editing ? `${saved.name} updated` : "Drug added successfully");
-      qc.invalidateQueries({ queryKey: ["drugs", pharmacyId] });
-      closeForm();
+  // ── Mutations ──
+  const priceMutation = useMutation({
+    mutationFn: ({ drug, field, value }: { drug: DrugResponse; field: PriceField; value: number; key: QueryKey }) =>
+      drugApi.bulkPrices(pharmacyId, [{ id: drug.id, [field]: value }]),
+    // Show the new price straight away; put the old one back if the server refuses.
+    onMutate: async ({ drug, field, value, key }) => {
+      await qc.cancelQueries({ queryKey: key });
+      const previous = qc.getQueryData<Page<DrugResponse>>(key);
+      qc.setQueryData<Page<DrugResponse>>(key, (old) =>
+        old ? { ...old, content: old.content.map((d) => (d.id === drug.id ? { ...d, [field]: value } : d)) } : old,
+      );
+      return { previous };
     },
-    onError: (err: unknown) => toast.error(apiErrorMessage(err, editing ? "Failed to update drug" : "Failed to add drug")),
+    onSuccess: (res, { drug, field, key }, ctx) => {
+      if (res.skipped.length > 0) {
+        if (ctx?.previous) qc.setQueryData(key, ctx.previous);
+        toast.error(`Price not saved: ${skipReasonLabel(res.skipped[0].reason)}`);
+      } else {
+        toast.success(`${field === "sellingPrice" ? "Selling" : "Buying"} price of ${drug.name} saved`);
+      }
+    },
+    onError: (err: unknown, { key }, ctx) => {
+      if (ctx?.previous) qc.setQueryData(key, ctx.previous);
+      toast.error(apiErrorMessage(err, "Could not save the price"));
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: ["drugs", pharmacyId] }),
   });
 
   const deleteMutation = useMutation({
@@ -161,81 +207,7 @@ export default function DrugsPage({ params }: PageProps) {
     onError: (err: unknown) => toast.error(apiErrorMessage(err, "Failed to reactivate drug")),
   });
 
-  const selling = Number(form.sellingPrice);
-  const buying = form.buyingPrice.trim() === "" ? null : Number(form.buyingPrice);
-  const unitsPerPack = Number(form.unitsPerPack);
-  const sellsInPacks = Number.isInteger(unitsPerPack) && unitsPerPack > 1;
-  const halfDosePrice = form.halfDosePrice.trim() === "" ? selling / 2 : Number(form.halfDosePrice);
-  const sellsBelowCost = buying !== null && Number.isFinite(selling) && Number.isFinite(buying) && selling < buying;
-
-  function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-
-    if (!form.name.trim() || !form.unit.trim()) {
-      toast.error("Drug name and unit are required");
-      return;
-    }
-    if (form.sellingPrice.trim() === "" || !Number.isFinite(selling) || selling < 0) {
-      toast.error("Enter a selling price of 0 or more");
-      return;
-    }
-    if (buying !== null && (!Number.isFinite(buying) || buying < 0)) {
-      toast.error("The buying price must be 0 or more (or left empty)");
-      return;
-    }
-    if (form.unitsPerPack.trim() === "" || !Number.isInteger(unitsPerPack) || unitsPerPack < 1) {
-      toast.error("Units per pack must be a whole number, 1 or more");
-      return;
-    }
-    if (form.allowsHalfDose && (!Number.isFinite(halfDosePrice) || halfDosePrice <= 0)) {
-      toast.error("Enter a half-dose price above 0, or leave it empty for half of the selling price");
-      return;
-    }
-    const reorder = Number(form.reorderLevel);
-    if (form.reorderLevel.trim() === "" || !Number.isInteger(reorder) || reorder < 0) {
-      toast.error("The reorder level must be a whole number, 0 or more");
-      return;
-    }
-
-    const common = {
-      name: form.name.trim(),
-      unit: form.unit,
-      unitsPerPack,
-      sellingPrice: selling,
-      allowsHalfDose: form.allowsHalfDose,
-      halfDosePrice: form.allowsHalfDose ? halfDosePrice : null,
-      reorderLevel: reorder,
-      requiresPrescription: form.requiresPrescription,
-    };
-
-    if (editing) {
-      // Optional details are sent as null when emptied, which clears them on the server.
-      saveMutation.mutate({
-        update: {
-          ...common,
-          brand: form.brand.trim() || null,
-          genericName: form.genericName.trim() || null,
-          barcode: form.barcode.trim() || null,
-          categoryId: form.categoryId || null,
-          packUnit: sellsInPacks ? form.packUnit.trim() || null : null,
-          buyingPrice: buying,
-        },
-      });
-    } else {
-      saveMutation.mutate({
-        create: {
-          ...common,
-          brand: form.brand.trim() || undefined,
-          genericName: form.genericName.trim() || undefined,
-          barcode: form.barcode.trim() || undefined,
-          categoryId: form.categoryId || undefined,
-          packUnit: sellsInPacks ? form.packUnit.trim() || undefined : undefined,
-          buyingPrice: buying ?? undefined,
-        } as CreateDrugRequest,
-      });
-    }
-  }
-
+  // ── Files ──
   const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) {
@@ -264,327 +236,213 @@ export default function DrugsPage({ params }: PageProps) {
     const csv =
       "Name,Generic Name,Category,Unit,Barcode,Selling Price,Buying Price,Reorder Level,Requires Prescription\n" +
       "Paracetamol 500mg tablet,Paracetamol,Pain Relief,tablet,,1000,600,50,no\n";
-    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = "drugs-template.csv";
-    link.click();
-    URL.revokeObjectURL(url);
+    downloadBlob(new Blob([csv], { type: "text/csv" }), "drugs-template.csv");
   }
 
+  async function exportList(type: "full" | "prices") {
+    try {
+      const blob = await drugApi.exportCsv(pharmacyId, type, { ...filterParams(filters, search), sort, direction });
+      downloadBlob(blob, `${type === "prices" ? "price-list" : "drugs"}-${ymd(new Date())}.csv`);
+    } catch (err) {
+      toast.error(apiErrorMessage(err, "Could not download the list"));
+    }
+  }
+
+  const total = data?.totalElements;
+  const from = total ? page * PAGE_SIZE + 1 : 0;
+  const to = total ? Math.min(total, page * PAGE_SIZE + drugs.length) : 0;
+  const duplicateCount = duplicates?.totalGroups ?? 0;
+  const newCount = newForMe?.total ?? 0;
+
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
+    <div className="space-y-5 min-w-0">
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-2xl font-bold tracking-tight text-foreground">Drug Catalog</h2>
           <p className="text-muted-foreground text-sm mt-1">
-            {data?.totalElements ?? 0} drugs registered
+            Every medicine you sell, with its price, stock and profit.
+            {canManage && " Click a price to change it."}
           </p>
         </div>
-        <div className="flex flex-wrap items-center justify-end gap-2">
-          <Button variant="outline" size="sm" onClick={downloadTemplate} title="A sample file showing the columns to use">
-            <Download className="h-4 w-4 mr-2" />
-            Template
-          </Button>
-          <label>
-            <input type="file" accept=".xlsx,.csv" className="hidden" onChange={handleImport} />
-            <Button variant="outline" size="sm" asChild>
-              <span className="cursor-pointer flex items-center gap-2">
-                <Upload className="h-4 w-4" />
-                Import Excel
-              </span>
+        {canManage && (
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="outline" size="sm" onClick={downloadTemplate} title="A sample file showing the columns to use">
+              <Download className="h-4 w-4 mr-2" />
+              Template
             </Button>
-          </label>
-          <Button variant="outline" size="sm" data-guide="add-drug" onClick={openAdd}>
-            <Plus className="h-4 w-4 mr-2" />
-            Add Drug
-          </Button>
-          <Button size="sm" data-guide="add-from-catalog" onClick={() => setShowCatalog(true)}>
-            <Library className="h-4 w-4 mr-2" />
-            Add from catalog
-          </Button>
-        </div>
-      </div>
-
-      <CatalogPickerDialog pharmacyId={pharmacyId} open={showCatalog} onOpenChange={setShowCatalog} initialSearch={catalogParam ?? undefined} />
-
-      {/* Add / Edit Drug Dialog */}
-      <Dialog open={showForm} onOpenChange={(open) => (open ? setShowForm(true) : closeForm())}>
-        <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>{editing ? `Edit ${editing.name}` : "Add Drug"}</DialogTitle>
-          </DialogHeader>
-          <form onSubmit={handleSubmit} className="space-y-4 px-6 py-4">
-            <div className="space-y-1">
-              <Label htmlFor="d-name">Drug Name *</Label>
-              <Input id="d-name" placeholder="e.g. Paracetamol 500mg" value={form.name}
-                onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
-            </div>
-            <div className="space-y-1">
-              <Label htmlFor="d-brand">Brand</Label>
-              <Input id="d-brand" placeholder="e.g. Panadol (the same medicine can be stocked under several brands)" value={form.brand}
-                onChange={(e) => setForm((f) => ({ ...f, brand: e.target.value }))} />
-            </div>
-            <div className="space-y-1">
-              <Label htmlFor="d-generic">Generic Name</Label>
-              <Input id="d-generic" placeholder="e.g. Acetaminophen" value={form.genericName}
-                onChange={(e) => setForm((f) => ({ ...f, genericName: e.target.value }))} />
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1">
-                <Label htmlFor="d-category">Category</Label>
-                <select id="d-category" className={selectClass} value={form.categoryId}
-                  onChange={(e) => setForm((f) => ({ ...f, categoryId: e.target.value }))}>
-                  <option value="">No category</option>
-                  {activeCategories.map((c) => (
-                    <option key={c.id} value={c.id}>{c.name}{c.active ? "" : " (inactive)"}</option>
-                  ))}
-                </select>
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="d-unit">Unit *</Label>
-                <select id="d-unit" className={selectClass} value={form.unit}
-                  onChange={(e) => setForm((f) => ({ ...f, unit: e.target.value }))}>
-                  {/* A drug saved with a unit that isn't in the standard list must still show it. */}
-                  {!UNIT_OPTIONS.some((u) => u.value === form.unit) && <option value={form.unit}>{form.unit}</option>}
-                  {UNIT_OPTIONS.map((u) => (
-                    <option key={u.value} value={u.value}>{u.label}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1">
-                <Label htmlFor="d-upp">Units per pack *</Label>
-                <Input id="d-upp" type="number" min={1} step={1} value={form.unitsPerPack}
-                  onChange={(e) => setForm((f) => ({ ...f, unitsPerPack: e.target.value }))} />
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="d-pack">Pack name</Label>
-                <Input id="d-pack" placeholder="e.g. box, strip" disabled={!sellsInPacks} value={form.packUnit}
-                  onChange={(e) => setForm((f) => ({ ...f, packUnit: e.target.value }))} />
-              </div>
-            </div>
-            <p className="text-xs text-muted-foreground -mt-2">
-              Prices and stock are counted per {form.unit}. Put 1 if this drug is not split.
-              {editing && " Changing this does not change existing stock counts."}
-              {sellsInPacks && Number.isFinite(selling) && form.sellingPrice.trim() !== "" && (
-                <> One {form.packUnit.trim() || "pack"} = {unitsPerPack} {form.unit} = TZS {(selling * unitsPerPack).toLocaleString()}
-                  {buying !== null && Number.isFinite(buying) && <> (cost TZS {(buying * unitsPerPack).toLocaleString()})</>}.</>
-              )}
-            </p>
-            <div className="space-y-1">
-              <Label htmlFor="d-barcode">Barcode</Label>
-              <Input id="d-barcode" placeholder="optional" value={form.barcode}
-                onChange={(e) => setForm((f) => ({ ...f, barcode: e.target.value }))} />
-            </div>
-            <div className="grid grid-cols-3 gap-3">
-              <div className="space-y-1">
-                <Label htmlFor="d-sell">Selling Price per {form.unit} (TZS) *</Label>
-                <Input id="d-sell" type="number" min={0} step="any" inputMode="decimal" value={form.sellingPrice}
-                  onChange={(e) => setForm((f) => ({ ...f, sellingPrice: e.target.value }))} />
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="d-buy">Buying Price per {form.unit} (TZS)</Label>
-                <Input id="d-buy" type="number" min={0} step="any" inputMode="decimal" placeholder="optional" value={form.buyingPrice}
-                  onChange={(e) => setForm((f) => ({ ...f, buyingPrice: e.target.value }))} />
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="d-reorder">Reorder Level *</Label>
-                <Input id="d-reorder" type="number" min={0} step={1} value={form.reorderLevel}
-                  onChange={(e) => setForm((f) => ({ ...f, reorderLevel: e.target.value }))} />
-              </div>
-            </div>
-            <div className="rounded-md border border-border p-3 space-y-2">
-              <div className="flex items-center gap-2">
-                <input
-                  id="d-half"
-                  type="checkbox"
-                  className="h-4 w-4 rounded border-input"
-                  checked={form.allowsHalfDose}
-                  onChange={(e) => setForm((f) => ({ ...f, allowsHalfDose: e.target.checked }))}
-                />
-                <Label htmlFor="d-half">Can be sold by the half dose</Label>
-              </div>
-              {form.allowsHalfDose && (
-                <div className="space-y-1">
-                  <Label htmlFor="d-half-price">Half-dose price (TZS)</Label>
-                  <Input id="d-half-price" type="number" min={0} step="any" inputMode="decimal"
-                    placeholder={Number.isFinite(selling) && form.sellingPrice.trim() !== "" ? String(selling / 2) : "half of the selling price"}
-                    value={form.halfDosePrice}
-                    onChange={(e) => setForm((f) => ({ ...f, halfDosePrice: e.target.value }))} />
-                  <p className="text-xs text-muted-foreground">
-                    Leave empty for half of the selling price
-                    {Number.isFinite(selling) && form.sellingPrice.trim() !== "" && <> (TZS {(selling / 2).toLocaleString()})</>}
-                    , or type a higher price to add something on top. A half dose takes half a {form.unit} of stock.
-                  </p>
-                </div>
-              )}
-            </div>
-            {sellsBelowCost && (
-              <p className="flex items-start gap-2 rounded-md border border-yellow-500/40 bg-yellow-500/10 p-2 text-xs text-yellow-700 dark:text-yellow-400">
-                <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
-                The selling price is lower than the buying price, so every sale of this drug loses money.
-              </p>
-            )}
-            {editing && (
-              <p className="text-xs text-muted-foreground">
-                Price changes apply to new sales only; past receipts keep the price they were sold at. Every change is
-                recorded in the audit log.
-              </p>
-            )}
-            <div className="flex items-center gap-2">
-              <input
-                id="d-prescription"
-                type="checkbox"
-                className="h-4 w-4 rounded border-input"
-                checked={form.requiresPrescription}
-                onChange={(e) => setForm((f) => ({ ...f, requiresPrescription: e.target.checked }))}
-              />
-              <Label htmlFor="d-prescription">Requires Prescription</Label>
-            </div>
-            <DialogFooter>
-              <Button type="button" variant="outline" onClick={closeForm}>
-                Cancel
+            <label>
+              <input type="file" accept=".xlsx,.csv" className="hidden" onChange={handleImport} />
+              <Button variant="outline" size="sm" asChild>
+                <span className="cursor-pointer flex items-center gap-2">
+                  <Upload className="h-4 w-4" />
+                  Import Excel
+                </span>
               </Button>
-              <Button type="submit" disabled={saveMutation.isPending}>
-                {saveMutation.isPending ? "Saving…" : editing ? "Save changes" : "Add Drug"}
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
-
-      {/* Search */}
-      <div className="relative max-w-sm">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-        <Input
-          placeholder="Search drugs…"
-          className="pl-9"
-          value={search}
-          onChange={(e: React.ChangeEvent<HTMLInputElement>) => { setSearch(e.target.value); setPage(0); }}
-        />
-      </div>
-
-      <Card>
-        <CardContent className="p-0">
-          {/* Fixed column widths and wrapping text: a long drug name grows the row downwards instead of
-              widening the table and pushing the actions menu out of sight. */}
-          <Table className="table-fixed min-w-[820px]">
-            <TableHeader>
-              <TableRow>
-                <TableHead className="w-[32%]">Name</TableHead>
-                <TableHead className="w-[20%]">Generic Name</TableHead>
-                <TableHead className="w-[13%]">Category</TableHead>
-                <TableHead className="w-[17%]">Unit Price</TableHead>
-                <TableHead className="w-[10%]">Status</TableHead>
-                <TableHead className="w-14 sticky right-0 bg-card" />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {isLoading ? (
-                Array.from({ length: 5 }).map((_, i) => (
-                  <TableRow key={i}>
-                    {Array.from({ length: 6 }).map((_, j) => (
-                      <TableCell key={j}>
-                        <div className="h-4 w-full bg-muted animate-pulse rounded" />
-                      </TableCell>
-                    ))}
-                  </TableRow>
-                ))
-              ) : data?.content.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={6} className="text-center text-muted-foreground py-12">
-                    <Pill className="h-8 w-8 mx-auto mb-2 opacity-30" />
-                    No drugs found
-                  </TableCell>
-                </TableRow>
-              ) : (
-                data?.content.map((drug) => (
-                  <TableRow key={drug.id} className="hover:bg-accent/50">
-                    <TableCell className="font-medium whitespace-normal break-words align-top" title={drug.name}>
-                      {drug.name}
-                      {drug.brand && !drug.name.toLowerCase().startsWith(drug.brand.toLowerCase()) && (
-                        <span className="block text-xs font-normal text-muted-foreground">Brand: {drug.brand}</span>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground whitespace-normal break-words align-top">{drug.genericName}</TableCell>
-                    <TableCell className="whitespace-normal break-words align-top">{drug.categoryName ?? "—"}</TableCell>
-                    <TableCell className="tabular-nums whitespace-normal align-top">
-                      TZS {drug.sellingPrice.toLocaleString()}
-                      <span className="text-xs text-muted-foreground"> / {drug.unit}</span>
-                      {drug.halfDosePrice != null && (
-                        <div className="text-xs text-muted-foreground">½ dose: TZS {drug.halfDosePrice.toLocaleString()}</div>
-                      )}
-                      {drug.unitsPerPack > 1 && (
-                        <div className="text-xs text-muted-foreground">
-                          {drug.packUnit ?? "pack"} of {drug.unitsPerPack}: TZS {(drug.sellingPrice * drug.unitsPerPack).toLocaleString()}
-                        </div>
-                      )}
-                    </TableCell>
-                    <TableCell className="align-top">
-                      <Badge variant={drug.active ? "default" : "secondary"}>
-                        {drug.active ? "Active" : "Inactive"}
-                      </Badge>
-                    </TableCell>
-                    {/* Always visible: pinned to the right edge even when the table scrolls sideways. */}
-                    <TableCell className="sticky right-0 bg-card align-top shadow-[-8px_0_8px_-8px_rgba(0,0,0,0.15)]">
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" size="icon" className="h-8 w-8">
-                            <MoreHorizontal className="h-4 w-4" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          <DropdownMenuItem onClick={() => openEdit(drug)}>Edit</DropdownMenuItem>
-                          {drug.active ? (
-                            <DropdownMenuItem
-                              className="text-destructive"
-                              onClick={() => deleteMutation.mutate(drug.id)}
-                            >
-                              Deactivate
-                            </DropdownMenuItem>
-                          ) : (
-                            <DropdownMenuItem onClick={() => reactivateMutation.mutate(drug.id)}>
-                              Reactivate
-                            </DropdownMenuItem>
-                          )}
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </TableCell>
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
-
-      {/* Pagination */}
-      {data && data.totalPages > 1 && (
-        <div className="flex items-center justify-between text-sm text-muted-foreground">
-          <span>
-            Page {page + 1} of {data.totalPages} · {data.totalElements} total
-          </span>
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={data.first}
-              onClick={() => setPage((p) => p - 1)}
-            >
-              Previous
+            </label>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm">
+                  <Download className="h-4 w-4 mr-2" />
+                  Download
+                  <ChevronDown className="h-3.5 w-3.5 ml-1" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => exportList("full")}>Download list (CSV)</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => exportList("prices")}>Download price list (CSV)</DropdownMenuItem>
+                <p className="px-2 pb-1 text-[11px] text-muted-foreground max-w-56">Uses the filters you have on now.</p>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <Button variant="outline" size="sm" data-guide="add-drug" onClick={openAdd}>
+              <Plus className="h-4 w-4 mr-2" />
+              Add Drug
             </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={data.last}
-              onClick={() => setPage((p) => p + 1)}
-            >
-              Next
+            <Button size="sm" data-guide="add-from-catalog" onClick={() => setShowCatalogAdd(true)}>
+              <Library className="h-4 w-4 mr-2" />
+              Add from catalog
+              {newCount > 0 && (
+                <span className="ml-2 rounded-full bg-primary-foreground/20 px-1.5 text-[11px] tabular-nums">{newCount}</span>
+              )}
             </Button>
           </div>
+        )}
+      </div>
+
+      {canManage && (duplicateCount > 0 || newCount > 0) && (
+        <div className="flex flex-wrap gap-2">
+          {duplicateCount > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowDuplicates(true)}
+              className="flex items-center gap-2 rounded-lg border border-amber-300 bg-amber-500/10 px-3 py-2 text-left text-sm hover:border-amber-500 dark:border-amber-800"
+            >
+              <Copy className="h-4 w-4 shrink-0 text-amber-600" />
+              <span>
+                <strong>Possible duplicates ({duplicateCount})</strong>
+                <span className="block text-xs text-muted-foreground">The same medicine entered twice splits its stock. Tap to check.</span>
+              </span>
+            </button>
+          )}
+          {newCount > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowCatalogAdd(true)}
+              className="flex items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm hover:border-primary"
+            >
+              <Library className="h-4 w-4 shrink-0 text-primary" />
+              <span>
+                <strong>{newCount.toLocaleString()} new medicines can be added</strong>
+                <span className="block text-xs text-muted-foreground">From the shared catalog, no typing needed.</span>
+              </span>
+            </button>
+          )}
         </div>
+      )}
+
+      <CatalogPickerDialog
+        pharmacyId={pharmacyId}
+        open={showCatalogPicker}
+        onOpenChange={setShowCatalogPicker}
+        initialSearch={catalogParam ?? undefined}
+      />
+      <CatalogAddDialog
+        pharmacyId={pharmacyId}
+        open={showCatalogAdd}
+        onOpenChange={setShowCatalogAdd}
+        onPickPerItem={() => setShowCatalogPicker(true)}
+        onFillPrices={() => startFill("sellingPrice")}
+      />
+      <DuplicatesDialog pharmacyId={pharmacyId} open={showDuplicates} onOpenChange={setShowDuplicates} />
+      <DrugFormDialog
+        pharmacyId={pharmacyId}
+        open={showForm}
+        editing={editing}
+        categories={categories ?? []}
+        onClose={closeForm}
+        onOpenExisting={openExisting}
+      />
+
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative w-full sm:max-w-sm">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            placeholder="Search name, brand, generic or barcode…"
+            className="pl-9"
+            value={searchInput}
+            onChange={(e) => { setSearchInput(e.target.value); setPage(0); }}
+          />
+        </div>
+        {canManage && !fillMode && (
+          <Button variant="outline" size="sm" onClick={() => startFill("buyingPrice")} title="Type in the missing buying prices one after another">
+            <PencilLine className="h-4 w-4 mr-2" />
+            Fill buying prices
+          </Button>
+        )}
+      </div>
+
+      <DrugFilterBar
+        filters={filters}
+        onChange={changeFilters}
+        onClear={clearFilters}
+        categories={categories ?? []}
+        search={search}
+        matches={total}
+        attentionCount={attention?.totalElements}
+        canManage={canManage}
+      />
+
+      {fillMode ? (
+        <FillPricesPanel
+          key={fillMode}
+          pharmacyId={pharmacyId}
+          drugs={drugs}
+          isLoading={isLoading}
+          field={fillMode}
+          onClose={() => setFillMode(null)}
+        />
+      ) : (
+        <Card className="min-w-0">
+          <CardContent className="p-0">
+            <DrugTable
+              drugs={drugs}
+              isLoading={isLoading}
+              canManage={canManage}
+              sort={sort}
+              direction={direction}
+              onSort={changeSort}
+              selected={selected}
+              onToggle={toggleRow}
+              onTogglePage={togglePage}
+              onSavePrice={(drug, field, value) => priceMutation.mutate({ drug, field, value, key: listKey })}
+              onEdit={openEdit}
+              onDeactivate={(d) => deleteMutation.mutate(d.id)}
+              onReactivate={(d) => reactivateMutation.mutate(d.id)}
+            />
+          </CardContent>
+        </Card>
+      )}
+
+      {data && total !== undefined && total > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-muted-foreground">
+          <span className="tabular-nums">
+            {from.toLocaleString()}–{to.toLocaleString()} of {total.toLocaleString()}
+            {isFetching && !isLoading ? " · updating…" : ""}
+          </span>
+          {data.totalPages > 1 && (
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" disabled={data.first} onClick={() => setPage((p) => p - 1)}>
+                Previous
+              </Button>
+              <Button variant="outline" size="sm" disabled={data.last} onClick={() => setPage((p) => p + 1)}>
+                Next
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {canManage && !fillMode && (
+        <BulkActionBar pharmacyId={pharmacyId} selected={selected} categories={categories ?? []} onClear={() => setSelected({})} />
       )}
     </div>
   );
