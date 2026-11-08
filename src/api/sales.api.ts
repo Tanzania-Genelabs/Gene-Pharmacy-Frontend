@@ -5,7 +5,7 @@ export const salesApi = {
   create: (pharmacyId: string, data: CreateSaleRequest) =>
     api.post<SaleResponse>(`/api/v1/pharmacies/${pharmacyId}/sales`, data).then((r) => r.data),
 
-  list: (pharmacyId: string, params?: { page?: number; size?: number; branchId?: string; status?: string; from?: string; to?: string }) =>
+  list: (pharmacyId: string, params?: { page?: number; size?: number; branchId?: string; status?: string; from?: string; to?: string; paymentReference?: string }) =>
     api.get<Page<SaleSummaryResponse>>(`/api/v1/pharmacies/${pharmacyId}/sales`, { params }).then((r) => r.data),
 
   getById: (pharmacyId: string, saleId: string) =>
