@@ -558,8 +558,13 @@ export interface SaleSummaryResponse {
   saleDate: string;
   status: SaleStatus;
   paymentMethod: SalePaymentMethod;
+  /** The server sends decimal strings ("2000.00"); wrap in Number() before doing arithmetic. */
   netAmount: number;
+  /** Number of lines on the receipt. */
   totalItems: number;
+  branchName?: string | null;
+  /** What was sold, so a receipt row can show it without opening the receipt. */
+  items?: { drugId: string; drugName: string | null; quantity: number; isHalfDose: boolean; lineTotal: number }[];
 }
 
 export interface VoidSaleRequest {
@@ -1614,3 +1619,85 @@ export interface CashFlowReport {
   totals: Omit<CashFlowDay, "date">;
   days: CashFlowDay[];
 }
+
+// ─── Sales by day, profit breakdown, stock insights ─────────────────────────
+// Money arrives as decimal strings ("3000.00"); wrap in Number() before arithmetic.
+
+export interface SalesDayRow {
+  /** YYYY-MM-DD in the shop's timezone. */
+  date: string;
+  salesCount: number;
+  voidedCount: number;
+  revenue: string;
+  /** Null for Sellers. */
+  cost: string | null;
+  /** Null for Sellers. */
+  profit: string | null;
+}
+
+export interface SalesDaysResponse {
+  from: string;
+  to: string;
+  timezone: string;
+  totals: Omit<SalesDayRow, "date">;
+  /** Newest day first; only days that had sales. */
+  days: SalesDayRow[];
+}
+
+export type ProfitGroup = "day" | "week" | "month";
+
+export interface ProfitPeriodRow {
+  /** A date, the Monday a week starts on, or "YYYY-MM". */
+  period: string;
+  group: ProfitGroup;
+  salesCount: number;
+  revenue: string;
+  cost: string;
+  profit: string;
+}
+
+export interface ProfitProductRow {
+  drugId: string;
+  drugName: string;
+  unit: string | null;
+  unitsSold: number;
+  revenue: string;
+  cost: string;
+  profit: string;
+  marginPct: string | number | null;
+}
+
+export interface ProfitBreakdownResponse {
+  from: string;
+  to: string;
+  group: ProfitGroup;
+  revenue: string;
+  cost: string;
+  profit: string;
+  marginPct: string | number | null;
+  /** Newest first. */
+  periods: ProfitPeriodRow[];
+  /** Best profit first. */
+  products: ProfitProductRow[];
+}
+
+export interface InventoryInsightsResponse {
+  branchId: string | null;
+  products: number;
+  inStock: number;
+  lowStock: number;
+  outOfStock: number;
+  totalUnits: number;
+  costValue: string;
+  retailValue: string;
+  expectedProfit: string;
+  missingBuyingPrice: number;
+  missingSellingPrice: number;
+  expiringSoon: { batches: number; costValue: string; days: number };
+  expired: { batches: number; costValue: string };
+  runningOut: { drugId: string; drugName: string; unit: string | null; quantity: number; soldPerDay: number | string; daysLeft: number | string | null }[];
+  topValue: { drugId: string; drugName: string; unit: string | null; quantity: number; costValue: string; retailValue: string }[];
+  categories: { category: string | null; products: number; lowOrOut: number; costValue: string }[];
+}
+
+export type StockStatusFilter = "low" | "out" | "ok";
