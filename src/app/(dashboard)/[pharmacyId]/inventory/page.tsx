@@ -3,6 +3,7 @@
 import { use, useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { inventoryApi } from "@/api/inventory.api";
 import { insightsApi } from "@/api/insights.api";
 import { money } from "@/components/expenses/format";
@@ -120,7 +121,11 @@ export default function InventoryPage({ params }: PageProps) {
 
   // What the stock table and the numbers above it are about: one branch or all of them, and a status.
   const [viewBranchId, setViewBranchId] = useState("");
-  const [statusFilter, setStatusFilter] = useState<StockStatusFilter | "">("");
+  // A status can be opened from a link, e.g. ?status=low from the dashboard.
+  const statusParam = useSearchParams().get("status");
+  const [statusFilter, setStatusFilter] = useState<StockStatusFilter | "">(
+    statusParam === "low" || statusParam === "out" || statusParam === "ok" ? statusParam : "",
+  );
   const [invTab, setInvTab] = useState("stock");
   function chooseStatus(status: StockStatusFilter | "") {
     setStatusFilter(status);
