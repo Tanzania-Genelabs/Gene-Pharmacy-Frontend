@@ -257,6 +257,127 @@ export interface DrugResponse {
   active: boolean;
   createdAt: string;
   updatedAt: string;
+  /** Strength, e.g. "500mg". */
+  unitSize?: string | null;
+  /** Set on a drug that was merged into another one (it is then inactive). */
+  mergedIntoId?: string | null;
+  // ── Extra fields the drug list sends (absent on single-drug responses) ──
+  /** Units in stock across branches (or the requested branch); halves possible. */
+  stockTotal?: number;
+  everStocked?: boolean;
+  stockStatus?: "out" | "low" | "ok";
+  /** sellingPrice − buyingPrice as a decimal string; null without a buying price. */
+  margin?: string | null;
+  /** Margin as % of the selling price, 1 decimal, as a string. */
+  marginPct?: string | null;
+  lastSoldAt?: string | null;
+  issues?: DrugIssue[];
+}
+
+export type DrugIssue = "noBuyingPrice" | "noSellingPrice" | "noCategory" | "genericSameAsName";
+
+export type DrugSort = "name" | "price" | "margin" | "stock" | "updated";
+
+/** Filters of GET drugs (also accepted by GET drugs/export). */
+export interface DrugListParams {
+  page?: number;
+  size?: number;
+  search?: string;
+  /** A category id, or "none" for drugs without a category. */
+  categoryId?: string;
+  branchId?: string;
+  status?: "active" | "inactive" | "all";
+  stock?: "out" | "low" | "ok" | "none";
+  missing?: "buyingPrice" | "sellingPrice" | "category";
+  neverSold?: 1;
+  belowCost?: 1;
+  needsAttention?: 1;
+  sort?: DrugSort;
+  direction?: "asc" | "desc";
+}
+
+export interface DrugBulkChanges {
+  categoryId?: string | null;
+  active?: boolean;
+  unit?: string;
+  allowsHalfDose?: boolean;
+  sellingPricePercent?: number;
+  buyingPricePercent?: number;
+  sellingPrice?: number;
+  buyingPrice?: number;
+  reorderLevel?: number;
+}
+
+export interface DrugPriceRow {
+  id: string;
+  sellingPrice?: number;
+  buyingPrice?: number;
+}
+
+export interface DrugBulkResult {
+  updated: number;
+  skipped: { id: string; reason: string }[];
+}
+
+export interface DuplicateDrug {
+  id: string;
+  name: string;
+  brand: string | null;
+  genericName: string | null;
+  strength: string | null;
+  barcode: string | null;
+  unit: string;
+  categoryName: string | null;
+  active: boolean;
+  sellingPrice: string;
+  stockTotal: number;
+  salesCount: number;
+}
+
+export interface DuplicateGroup {
+  key: string;
+  reason: "SAME_BARCODE" | "SAME_BRAND_STRENGTH" | "SAME_BRAND_NAME" | "SAME_NAME" | string;
+  drugs: DuplicateDrug[];
+}
+
+export interface DuplicatesResponse {
+  groups: DuplicateGroup[];
+  totalGroups: number;
+  truncated: boolean;
+}
+
+export interface SimilarDrug {
+  id: string;
+  name: string;
+  brand: string | null;
+  genericName: string | null;
+  strength: string | null;
+  barcode: string | null;
+  unit: string;
+  sellingPrice: string;
+  active: boolean;
+  score: number;
+  reason: string;
+}
+
+export interface MergeDrugsResult {
+  keptId: string;
+  mergedIds: string[];
+  movedStock: number;
+  movedSaleItems: number;
+  drug: DrugResponse;
+}
+
+export interface FromCatalogRequest {
+  catalogItemIds: string[];
+  sellingPrice?: number;
+  initial?: { branchId: string; quantity: number };
+}
+
+export interface FromCatalogResult {
+  created: DrugResponse[];
+  skipped: number;
+  skippedItems: { catalogItemId: string; name: string | null; reason: string; message: string }[];
 }
 
 export interface CreateDrugRequest {
@@ -825,6 +946,8 @@ export interface NotificationResponse {
 
 export interface NotificationSummaryResponse {
   unreadCount: number;
+  /** What the server actually sends: notifications still waiting to be read. */
+  pendingCount?: number;
   totalCount: number;
   latestUnread: Array<{
     id: string;
