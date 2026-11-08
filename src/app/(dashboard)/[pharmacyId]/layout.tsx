@@ -9,7 +9,7 @@ import { SetupGuide } from "@/components/guide/setup-guide";
 import { useAuthStore } from "@/store/auth.store";
 import { pharmacyApi } from "@/api/pharmacy.api";
 import { adminSupportApi } from "@/api/admin.api";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { SupportBanner, SupportGate, supportKey } from "@/components/admin/support-session";
 import { SUBSCRIPTION_REQUIRED_EVENT } from "@/lib/api";
 import { Loader2, Clock, ShieldX, CreditCard } from "lucide-react";
@@ -25,6 +25,7 @@ export default function DashboardLayout({ children, params }: DashboardLayoutPro
   const { isAuthenticated, isInitializing, user } = useAuthStore();
   const router = useRouter();
   const pathname = usePathname();
+  const queryClient = useQueryClient();
   const [subscriptionRequired, setSubscriptionRequired] = useState(false);
   const [pharmacy, setPharmacy] = useState<PharmacyResponse | null>(null);
   const [pharmacyLoading, setPharmacyLoading] = useState(true);
@@ -53,10 +54,14 @@ export default function DashboardLayout({ children, params }: DashboardLayoutPro
   useEffect(() => {
     if (!isAuthenticated || !pharmacyId) return;
     pharmacyApi.getById(pharmacyId)
-      .then(setPharmacy)
+      .then((p) => {
+        setPharmacy(p);
+        // Shared with pages that show the pharmacy name (the dashboard greeting) without a second request.
+        queryClient.setQueryData(["pharmacy", pharmacyId], p);
+      })
       .catch(() => setPharmacy(null))
       .finally(() => setPharmacyLoading(false));
-  }, [isAuthenticated, pharmacyId]);
+  }, [isAuthenticated, pharmacyId, queryClient]);
 
   if (isInitializing || pharmacyLoading) {
     return (
