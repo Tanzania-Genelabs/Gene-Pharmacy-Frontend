@@ -11,11 +11,13 @@ export interface DrugFilters {
   /** "" = all, "none" = no category, else a category id. */
   categoryId: string;
   stock: "" | "out" | "low" | "ok" | "none";
+  /** "" = medicines and services, or only one of them. */
+  kind: "" | "medicine" | "service";
   quick: QuickFilter;
   showInactive: boolean;
 }
 
-export const NO_FILTERS: DrugFilters = { categoryId: "", stock: "", quick: "", showInactive: false };
+export const NO_FILTERS: DrugFilters = { categoryId: "", stock: "", kind: "", quick: "", showInactive: false };
 
 /** The list/export query for these filters. */
 export function filterParams(f: DrugFilters, search: string): DrugListParams {
@@ -24,6 +26,7 @@ export function filterParams(f: DrugFilters, search: string): DrugListParams {
     status: f.showInactive ? "all" : "active",
     categoryId: f.categoryId || undefined,
     stock: f.stock || undefined,
+    kind: f.kind || undefined,
     missing: f.quick === "noBuying" ? "buyingPrice" : f.quick === "noSelling" ? "sellingPrice" : undefined,
     belowCost: f.quick === "belowCost" ? 1 : undefined,
     neverSold: f.quick === "neverSold" ? 1 : undefined,
@@ -32,7 +35,7 @@ export function filterParams(f: DrugFilters, search: string): DrugListParams {
 }
 
 export const hasFilters = (f: DrugFilters, search: string) =>
-  search !== "" || f.categoryId !== "" || f.stock !== "" || f.quick !== "" || f.showInactive;
+  search !== "" || f.categoryId !== "" || f.stock !== "" || f.kind !== "" || f.quick !== "" || f.showInactive;
 
 const STOCK_OPTIONS: { value: DrugFilters["stock"]; label: string }[] = [
   { value: "", label: "All" },
@@ -97,6 +100,14 @@ export function DrugFilterBar({ filters, onChange, onClear, categories, search, 
             ))}
           </select>
         </label>
+        <div className="space-y-1">
+          <span className="block text-xs text-muted-foreground">Show</span>
+          <div className="flex flex-wrap gap-1.5">
+            {([["", "All"], ["medicine", "Medicines"], ["service", "Services"]] as const).map(([value, label]) => (
+              <Chip key={value || "all"} active={filters.kind === value} onClick={() => set({ kind: value })}>{label}</Chip>
+            ))}
+          </div>
+        </div>
         <div className="space-y-1">
           <span className="block text-xs text-muted-foreground">Stock</span>
           <div className="flex flex-wrap gap-1.5">
