@@ -148,6 +148,10 @@ export interface PharmacyResponse {
   email: string;
   status: PharmacyStatus;
   ownerId: string;
+  /** Local time (HH:MM) the business day rolls over when no shift is open; "00:00" is the plain calendar day. */
+  dayCutoffTime?: string;
+  /** Hours a shift may stay open before the system closes it. */
+  shiftMaxHours?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -167,6 +171,8 @@ export interface UpdatePharmacyRequest {
   city?: string;
   phone?: string;
   email?: string;
+  dayCutoffTime?: string;
+  shiftMaxHours?: number;
 }
 
 // ─── Branch ───────────────────────────────────────────────────────────────────
@@ -261,11 +267,15 @@ export interface DrugResponse {
   unitSize?: string | null;
   /** Set on a drug that was merged into another one (it is then inactive). */
   mergedIntoId?: string | null;
+  /** A service (injection, wound dressing...): sold at a price, never counted as stock. */
+  isService?: boolean;
+  /** Fixed: the saved price is filled in at the till. Manual: the seller types the price when selling. */
+  priceMode?: PriceMode;
   // ── Extra fields the drug list sends (absent on single-drug responses) ──
   /** Units in stock across branches (or the requested branch); halves possible. */
   stockTotal?: number;
   everStocked?: boolean;
-  stockStatus?: "out" | "low" | "ok";
+  stockStatus?: "out" | "low" | "ok" | "service";
   /** sellingPrice − buyingPrice as a decimal string; null without a buying price. */
   margin?: string | null;
   /** Margin as % of the selling price, 1 decimal, as a string. */
@@ -287,6 +297,8 @@ export interface DrugListParams {
   categoryId?: string;
   branchId?: string;
   status?: "active" | "inactive" | "all";
+  /** Medicines only, services only, or both (default). */
+  kind?: "all" | "medicine" | "service";
   stock?: "out" | "low" | "ok" | "none";
   missing?: "buyingPrice" | "sellingPrice" | "category";
   neverSold?: 1;
@@ -380,21 +392,28 @@ export interface FromCatalogResult {
   skippedItems: { catalogItemId: string; name: string | null; reason: string; message: string }[];
 }
 
+export type PriceMode = "Fixed" | "Manual";
+
 export interface CreateDrugRequest {
+  /** Add a service instead of a drug: no stock, unit, packs or expiry. */
+  isService?: boolean;
+  priceMode?: PriceMode;
   name: string;
   brand?: string;
   genericName?: string;
   barcode?: string;
-  unit: string;
+  /** Not needed for a service. */
+  unit?: string;
   unitsPerPack?: number;
   packUnit?: string;
-  sellingPrice: number;
+  /** Not needed for a service whose price is typed at the till. */
+  sellingPrice?: number;
   /** Left out, the half-dose price is half of the selling price. */
   allowsHalfDose?: boolean;
   halfDosePrice?: number | null;
-  buyingPrice: number;
-  reorderLevel: number;
-  requiresPrescription: boolean;
+  buyingPrice?: number;
+  reorderLevel?: number;
+  requiresPrescription?: boolean;
   categoryId?: string;
 }
 
@@ -417,6 +436,8 @@ export interface UpdateDrugRequest {
   reorderLevel?: number;
   requiresPrescription?: boolean;
   categoryId?: string | null;
+  /** Services only. */
+  priceMode?: PriceMode;
 }
 
 export interface DrugImportResult {
@@ -748,6 +769,14 @@ export interface ShiftResponse {
   totalSalesCount: number;
   totalSalesAmount: number | null;
   notes: string | null;
+  /** The day this shift's sales are counted on (Y-m-d). It stays that day past midnight until the shift is closed. */
+  businessDate?: string | null;
+  /** True when the system closed the shift because nobody did; the cash was not counted. */
+  autoClosed?: boolean;
+  /** Open shift still trading on a day the calendar has already moved past. */
+  pastCalendarDay?: boolean;
+  /** When the system will close an open shift on its own. */
+  autoCloseAt?: string | null;
 }
 
 // ─── Supplier ─────────────────────────────────────────────────────────────────
@@ -1888,6 +1917,8 @@ export interface DashboardSetupItem {
 export interface OwnerDashboardResponse {
   generatedAt: string;
   timezone: string;
+  /** "Today" is the business day: it stays on the open day past midnight until the shop closes it. */
+  businessDay?: { date: string; calendarDate: string; stillOpenPastDayEnd: boolean; cutoffTime: string };
   branchId: string | null;
   cacheSeconds: number;
   today: DashboardDay;
