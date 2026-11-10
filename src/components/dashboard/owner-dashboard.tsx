@@ -83,6 +83,7 @@ export function OwnerDashboard({ pharmacyId }: { pharmacyId: string }) {
         firstName={user?.firstName}
         pharmacyName={pharmacy?.name}
         todayKey={todayKey}
+        dayStillOpen={data?.businessDay?.stillOpenPastDayEnd}
         hour={hour}
         branches={heldBranchId ? undefined : branches}
         branchId={branchId}
