@@ -11,6 +11,8 @@ interface Props {
   firstName?: string | null;
   pharmacyName?: string | null;
   todayKey: string;
+  /** The shop is still trading on a day the calendar has moved past (a shift is open after midnight). */
+  dayStillOpen?: boolean;
   hour: number;
   /** Shown only when there is a choice to make. */
   branches?: BranchResponse[];
@@ -26,7 +28,7 @@ interface Props {
 
 /** Greeting, date, branch picker and "Updated hh:mm" with a refresh button. */
 export function DashboardHeader({
-  firstName, pharmacyName, todayKey, hour, branches, branchId = "", onBranchChange, fixedBranchName,
+  firstName, pharmacyName, todayKey, dayStillOpen, hour, branches, branchId = "", onBranchChange, fixedBranchName,
   updatedAt, refreshing, refreshFailed, onRefresh,
 }: Props) {
   const active = (branches ?? []).filter((b) => b.status === "Active");
@@ -43,6 +45,11 @@ export function DashboardHeader({
           {pharmacyName ? ` · ${pharmacyName}` : ""}
           {fixedBranchName ? ` · ${fixedBranchName}` : ""}
         </p>
+        {dayStillOpen && (
+          <p className="mt-1 text-xs font-medium text-amber-700 dark:text-amber-300">
+            Today is still open — sales made after midnight stay on this day until you close it.
+          </p>
+        )}
       </div>
       <div className="flex flex-wrap items-center gap-2">
         {showPicker && (
