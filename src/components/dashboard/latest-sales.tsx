@@ -5,13 +5,12 @@ import { useQuery } from "@tanstack/react-query";
 import { salesApi } from "@/api/sales.api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { money } from "@/components/expenses/format";
-import { rangeInstants } from "@/lib/periods";
 
 /** The six most recent receipts of today, refreshed once a minute while the tab is visible. */
 export function LatestSales({ pharmacyId, todayKey, branchId }: { pharmacyId: string; todayKey: string; branchId?: string }) {
   const { data, isLoading, isError } = useQuery({
     queryKey: ["sales", "today-latest", pharmacyId, todayKey, branchId ?? "all"],
-    queryFn: () => salesApi.list(pharmacyId, { page: 0, size: 6, branchId: branchId || undefined, ...rangeInstants({ from: todayKey, to: todayKey }) }),
+    queryFn: () => salesApi.list(pharmacyId, { page: 0, size: 6, branchId: branchId || undefined, businessDate: todayKey }),
     refetchInterval: 60_000,
     staleTime: 55_000,
   });
