@@ -15,9 +15,11 @@ import type { DrugResponse, DrugSort } from "@/types";
 export type PriceField = "sellingPrice" | "buyingPrice";
 
 function StockCell({ drug }: { drug: DrugResponse }) {
+  // A service is never counted: it has no stock to show.
+  if (drug.isService) return <span className="text-xs text-muted-foreground">No stock</span>;
   if (drug.stockTotal === undefined) return <span className="text-muted-foreground">—</span>;
   if (drug.everStocked === false) return <span className="text-xs text-muted-foreground">Never stocked</span>;
-  const status = drug.stockStatus ?? "ok";
+  const status = drug.stockStatus === "service" ? "ok" : (drug.stockStatus ?? "ok");
   const style = {
     out: "bg-red-600 text-white",
     low: "bg-amber-500 text-white",
@@ -37,7 +39,7 @@ function StockCell({ drug }: { drug: DrugResponse }) {
 
 function MarginCell({ drug }: { drug: DrugResponse }) {
   if (drug.margin === null || drug.margin === undefined) {
-    return <span className="text-xs text-muted-foreground italic">no cost</span>;
+    return <span className="text-xs text-muted-foreground italic">{drug.isService ? "all profit" : "no cost"}</span>;
   }
   const loss = Number(drug.margin) <= 0;
   return (
@@ -160,6 +162,7 @@ export function DrugTable({
                     <div className="flex items-start gap-1.5">
                       <div className="min-w-0">
                         <span className="font-semibold">{main}</span>
+                        {drug.isService && <Badge variant="outline" className="ml-1.5 align-middle text-[10px]">Service</Badge>}
                         {detail && <span className="block text-xs text-muted-foreground">{detail}</span>}
                         {drug.brand && !drug.name.toLowerCase().startsWith(drug.brand.toLowerCase()) && (
                           <span className="block text-xs text-muted-foreground">Brand: {drug.brand}</span>
@@ -187,13 +190,22 @@ export function DrugTable({
                   </TableCell>
                   <TableCell className="align-top"><StockCell drug={drug} /></TableCell>
                   <TableCell className="whitespace-normal align-top">
-                    <EditablePrice
-                      label="Selling price"
-                      value={drug.sellingPrice}
-                      readOnly={!canManage}
-                      onSave={(v) => onSavePrice(drug, "sellingPrice", v)}
-                    />
-                    <span className="text-xs text-muted-foreground"> / {drug.unit}</span>
+                    {drug.isService && drug.priceMode === "Manual" ? (
+                      <span className="text-sm">
+                        Typed at the till
+                        {drug.sellingPrice > 0 && <span className="block text-xs text-muted-foreground tabular-nums">suggested {money(drug.sellingPrice)}</span>}
+                      </span>
+                    ) : (
+                      <>
+                        <EditablePrice
+                          label="Selling price"
+                          value={drug.sellingPrice}
+                          readOnly={!canManage}
+                          onSave={(v) => onSavePrice(drug, "sellingPrice", v)}
+                        />
+                        {!drug.isService && <span className="text-xs text-muted-foreground"> / {drug.unit}</span>}
+                      </>
+                    )}
                     {drug.allowsHalfDose && drug.halfDosePrice != null && (
                       <div className="text-xs text-muted-foreground tabular-nums">½ dose: {money(drug.halfDosePrice)}</div>
                     )}
