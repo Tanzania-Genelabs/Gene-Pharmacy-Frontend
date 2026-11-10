@@ -18,6 +18,7 @@ import {
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
+import { BusinessDaySettings } from "@/components/shifts/business-day-settings";
 import type { ShiftStatus, OpenShiftRequest, CloseShiftRequest, ShiftResponse } from "@/types";
 
 interface PageProps {
@@ -32,6 +33,11 @@ const STATUS_VARIANT: Record<ShiftStatus, "default" | "secondary" | "destructive
 
 function fmt(n: number | null | undefined) {
   return n != null ? n.toLocaleString("en-TZ") : "—";
+}
+function fmtDay(s: string | null | undefined) {
+  if (!s) return "—";
+  const [y, m, d] = s.split("-").map(Number);
+  return new Date(y, (m || 1) - 1, d || 1).toLocaleDateString("en-TZ", { weekday: "short", day: "2-digit", month: "short" });
 }
 function fmtDate(s: string | null) {
   if (!s) return "—";
@@ -48,6 +54,7 @@ export default function ShiftsPage({ params }: PageProps) {
   const qc = useQueryClient();
   const user = useAuthStore((s) => s.user);
   const isSeller = user?.role === "Seller";
+  const isOwner = user?.role === "Owner";
 
   const [page, setPage] = useState(0);
 
@@ -77,6 +84,12 @@ export default function ShiftsPage({ params }: PageProps) {
     queryKey: ["branches", pharmacyId],
     queryFn: () => branchApi.list(pharmacyId),
   });
+
+  // Shops that trade past midnight: say plainly that the day is still open and where its sales are going.
+  const pastMidnight = useMemo(
+    () => data?.content.filter((s) => s.status === "Open" && s.pastCalendarDay) ?? [],
+    [data],
+  );
 
   const branchMap = useMemo(() => {
     const m: Record<string, string> = {};
@@ -110,7 +123,7 @@ export default function ShiftsPage({ params }: PageProps) {
     mutationFn: ({ shiftId, data }: { shiftId: string; data: CloseShiftRequest }) =>
       shiftApi.close(pharmacyId, shiftId, data),
     onSuccess: () => {
-      toast.success("Shift closed successfully");
+      toast.success("Day closed — new sales now start the next day");
       qc.invalidateQueries({ queryKey: ["shifts", pharmacyId] });
       setShowClose(false);
       setCloseTarget(null);
@@ -169,6 +182,28 @@ export default function ShiftsPage({ params }: PageProps) {
         </Button>
       </div>
 
+      {pastMidnight.map((shift) => (
+        <div
+          key={shift.id}
+          role="status"
+          className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-100"
+        >
+          <Clock className="mt-0.5 h-4 w-4 shrink-0" />
+          <div className="space-y-1">
+            <p className="font-medium">
+              {branchMap[shift.branchId] ?? "This branch"} is still trading on {fmtDay(shift.businessDate)}.
+            </p>
+            <p>
+              Sales made after midnight stay on {fmtDay(shift.businessDate)} until you close the day.
+              {shift.autoCloseAt ? ` If nobody closes it, the system will at ${fmtDate(shift.autoCloseAt)}.` : ""}
+            </p>
+          </div>
+          <Button size="sm" variant="outline" className="ml-auto shrink-0" onClick={() => openCloseDialog(shift)}>
+            Close day
+          </Button>
+        </div>
+      ))}
+
       {/* Table */}
       <Card>
         <CardContent className="p-0">
@@ -183,6 +218,7 @@ export default function ShiftsPage({ params }: PageProps) {
                 <TableHead>Sales</TableHead>
                 <TableHead>Total Sales</TableHead>
                 <TableHead>Status</TableHead>
+                <TableHead>Business Day</TableHead>
                 <TableHead>Opened At</TableHead>
                 <TableHead>Closed At</TableHead>
                 <TableHead className="w-12" />
@@ -192,14 +228,14 @@ export default function ShiftsPage({ params }: PageProps) {
               {isLoading ? (
                 Array.from({ length: 5 }).map((_, i) => (
                   <TableRow key={i}>
-                    {Array.from({ length: 11 }).map((_, j) => (
+                    {Array.from({ length: 12 }).map((_, j) => (
                       <TableCell key={j}><div className="h-4 w-full bg-muted animate-pulse rounded" /></TableCell>
                     ))}
                   </TableRow>
                 ))
               ) : !data?.content.length ? (
                 <TableRow>
-                  <TableCell colSpan={11} className="text-center text-muted-foreground py-14">
+                  <TableCell colSpan={12} className="text-center text-muted-foreground py-14">
                     <Clock className="h-9 w-9 mx-auto mb-2 opacity-25" />
                     <p className="text-sm">No shifts recorded yet</p>
                     <p className="text-xs mt-1 opacity-70">Click &ldquo;Open Shift&rdquo; to start a cashier session</p>
@@ -230,7 +266,13 @@ export default function ShiftsPage({ params }: PageProps) {
                         <Badge variant={STATUS_VARIANT[shift.status] ?? "secondary"}>
                           {shift.status}
                         </Badge>
+                        {shift.autoClosed && (
+                          <Badge variant="outline" className="ml-1.5" title="Nobody closed this day, so the system did. The cash was not counted.">
+                            Auto-closed
+                          </Badge>
+                        )}
                       </TableCell>
+                      <TableCell className="whitespace-nowrap text-xs">{fmtDay(shift.businessDate)}</TableCell>
                       <TableCell className="tabular-nums text-muted-foreground text-xs whitespace-nowrap">
                         {fmtDate(shift.openedAt)}
                       </TableCell>
@@ -243,7 +285,7 @@ export default function ShiftsPage({ params }: PageProps) {
                             variant="ghost" size="icon"
                             className="h-8 w-8 text-destructive hover:text-destructive"
                             onClick={() => openCloseDialog(shift)}
-                            title="Close shift"
+                            title="Close day"
                           >
                             <Square className="h-4 w-4" />
                           </Button>
@@ -270,6 +312,8 @@ export default function ShiftsPage({ params }: PageProps) {
           </Button>
         </div>
       )}
+
+      {isOwner && <BusinessDaySettings pharmacyId={pharmacyId} />}
 
       {/* Open Shift Dialog */}
       <Dialog open={showOpen} onOpenChange={setShowOpen}>
@@ -339,7 +383,7 @@ export default function ShiftsPage({ params }: PageProps) {
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Square className="h-4 w-4 text-destructive" />
-              Close Shift
+              Close Day
             </DialogTitle>
           </DialogHeader>
 
@@ -351,6 +395,7 @@ export default function ShiftsPage({ params }: PageProps) {
               <CardContent className="px-4 pb-3 space-y-1 text-sm">
                 {[
                   ["Branch", branchMap[closeTarget.branchId] ?? closeTarget.branchId.slice(0, 8)],
+                  ["Business Day", fmtDay(closeTarget.businessDate)],
                   ["Opened At", fmtDate(closeTarget.openedAt)],
                   ["Opening Cash", `TZS ${fmt(closeTarget.openingCash)}`],
                   ["Sales", `${closeTarget.totalSalesCount ?? 0} sales — TZS ${fmt(closeTarget.totalSalesAmount)}`],
@@ -394,7 +439,7 @@ export default function ShiftsPage({ params }: PageProps) {
             <DialogFooter className="pt-2">
               <Button type="button" variant="outline" onClick={() => setShowClose(false)}>Cancel</Button>
               <Button type="submit" variant="destructive" disabled={closeMutation.isPending}>
-                {closeMutation.isPending ? "Closing…" : "Close Shift"}
+                {closeMutation.isPending ? "Closing…" : "Close Day"}
               </Button>
             </DialogFooter>
           </form>
