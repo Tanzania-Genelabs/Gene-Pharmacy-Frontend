@@ -14,10 +14,14 @@ import { UNIT_OPTIONS } from "@/lib/drug-units";
 import { useDebounced } from "@/lib/use-debounced";
 import { money } from "@/components/expenses/format";
 import { DUPLICATE_REASONS, selectClass } from "./format";
-import type { CategoryResponse, CreateDrugRequest, DrugResponse, UpdateDrugRequest } from "@/types";
+import type { CategoryResponse, CreateDrugRequest, DrugResponse, PriceMode, UpdateDrugRequest } from "@/types";
 
 /** Form fields are text so they can be emptied while typing; they are converted on submit. */
 interface DrugForm {
+  /** A service (injection, wound dressing...) has no stock, packs or doses. */
+  isService: boolean;
+  /** Services only: the saved price is filled in at the till, or the seller types it when selling. */
+  priceMode: PriceMode;
   name: string;
   brand: string;
   genericName: string;
@@ -36,12 +40,15 @@ interface DrugForm {
 }
 
 const emptyForm = (): DrugForm => ({
+  isService: false, priceMode: "Fixed",
   name: "", brand: "", genericName: "", barcode: "", categoryId: "", unit: "tablet",
   unitsPerPack: "1", packUnit: "",
   sellingPrice: "", allowsHalfDose: false, halfDosePrice: "", buyingPrice: "", reorderLevel: "10", requiresPrescription: false,
 });
 
 const formFromDrug = (drug: DrugResponse): DrugForm => ({
+  isService: drug.isService ?? false,
+  priceMode: drug.priceMode ?? "Fixed",
   name: drug.name,
   brand: drug.brand ?? "",
   genericName: drug.genericName ?? "",
@@ -74,7 +81,7 @@ export function DrugFormDialog({ pharmacyId, open, editing, categories, onClose,
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>{editing ? `Edit ${editing.name}` : "Add Drug"}</DialogTitle>
+          <DialogTitle>{editing ? `Edit ${editing.name}` : "Add Drug or Service"}</DialogTitle>
         </DialogHeader>
         {/* Mounted per drug, so each opening starts from that drug's values. */}
         {open && (
@@ -114,7 +121,7 @@ function DrugFormBody({ pharmacyId, editing, categories, onClose, onOpenExisting
         ? drugApi.update(pharmacyId, editing.id, payload.update)
         : drugApi.create(pharmacyId, payload.create!),
     onSuccess: (saved) => {
-      toast.success(editing ? `${saved.name} updated` : "Drug added successfully");
+      toast.success(editing ? `${saved.name} updated` : saved.isService ? "Service added successfully" : "Drug added successfully");
       qc.invalidateQueries({ queryKey: ["drugs", pharmacyId] });
       onClose();
     },
@@ -128,8 +135,57 @@ function DrugFormBody({ pharmacyId, editing, categories, onClose, onOpenExisting
   const halfDosePrice = form.halfDosePrice.trim() === "" ? selling / 2 : Number(form.halfDosePrice);
   const sellsBelowCost = buying !== null && Number.isFinite(selling) && Number.isFinite(buying) && selling < buying;
 
+  const typedAtTill = form.isService && form.priceMode === "Manual";
+
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+
+    // A service is only a name, a price (fixed, or typed when selling) and an optional cost of its materials.
+    if (form.isService) {
+      if (!form.name.trim()) {
+        toast.error("Service name is required");
+        return;
+      }
+      const hasPrice = form.sellingPrice.trim() !== "";
+      if (!typedAtTill && (!hasPrice || !Number.isFinite(selling) || selling < 0)) {
+        toast.error("Enter the price of this service");
+        return;
+      }
+      if (hasPrice && (!Number.isFinite(selling) || selling < 0)) {
+        toast.error("The suggested price must be 0 or more");
+        return;
+      }
+      if (buying !== null && (!Number.isFinite(buying) || buying < 0)) {
+        toast.error("The cost must be 0 or more (or left empty)");
+        return;
+      }
+      const price = hasPrice ? selling : 0;
+      if (editing) {
+        saveMutation.mutate({
+          update: {
+            name: form.name.trim(),
+            priceMode: form.priceMode,
+            sellingPrice: price,
+            buyingPrice: buying,
+            barcode: form.barcode.trim() || null,
+            categoryId: form.categoryId || null,
+          },
+        });
+      } else {
+        saveMutation.mutate({
+          create: {
+            isService: true,
+            priceMode: form.priceMode,
+            name: form.name.trim(),
+            sellingPrice: hasPrice ? selling : undefined,
+            buyingPrice: buying ?? undefined,
+            barcode: form.barcode.trim() || undefined,
+            categoryId: form.categoryId || undefined,
+          },
+        });
+      }
+      return;
+    }
 
     if (!form.name.trim() || !form.unit.trim()) {
       toast.error("Drug name and unit are required");
@@ -198,12 +254,29 @@ function DrugFormBody({ pharmacyId, editing, categories, onClose, onOpenExisting
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4 px-6 py-4">
+      {!editing && (
+        <div role="radiogroup" aria-label="What are you adding?" className="grid grid-cols-2 gap-2">
+          {([[false, "Medicine / product", "Counted in stock"], [true, "Service", "Injection, wound dressing… no stock"]] as const).map(([value, label, hint]) => (
+            <button
+              key={label}
+              type="button"
+              role="radio"
+              aria-checked={form.isService === value}
+              onClick={() => setForm((f) => ({ ...f, isService: value }))}
+              className={`rounded-md border p-3 text-left text-sm transition-colors ${form.isService === value ? "border-primary bg-primary/10" : "border-input hover:bg-accent"}`}
+            >
+              <span className="block font-medium">{label}</span>
+              <span className="block text-xs text-muted-foreground">{hint}</span>
+            </button>
+          ))}
+        </div>
+      )}
       <div className="space-y-1">
-        <Label htmlFor="d-name">Drug Name *</Label>
-        <Input id="d-name" placeholder="e.g. Paracetamol 500mg" value={form.name}
+        <Label htmlFor="d-name">{form.isService ? "Service Name *" : "Drug Name *"}</Label>
+        <Input id="d-name" placeholder={form.isService ? "e.g. Injection, Wound dressing, Femi clean" : "e.g. Paracetamol 500mg"} value={form.name}
           onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
       </div>
-      {!editing && similar && similar.length > 0 && (
+      {!editing && !form.isService && similar && similar.length > 0 && (
         <div className="rounded-md border border-amber-400/50 bg-amber-500/10 p-3 text-sm space-y-2">
           <p className="flex items-center gap-2 font-medium text-amber-800 dark:text-amber-300">
             <Copy className="h-4 w-4 shrink-0" />
@@ -227,6 +300,62 @@ function DrugFormBody({ pharmacyId, editing, categories, onClose, onOpenExisting
           <p className="text-xs text-muted-foreground">If it really is a different product, just carry on and save.</p>
         </div>
       )}
+      {form.isService && (
+        <>
+          <div className="space-y-1">
+            <Label htmlFor="d-category">Category</Label>
+            <select id="d-category" className={selectClass} value={form.categoryId}
+              onChange={(e) => setForm((f) => ({ ...f, categoryId: e.target.value }))}>
+              <option value="">No category</option>
+              {activeCategories.map((c) => (
+                <option key={c.id} value={c.id}>{c.name}{c.active ? "" : " (inactive)"}</option>
+              ))}
+            </select>
+          </div>
+          <fieldset className="space-y-2 rounded-md border border-border p-3">
+            <legend className="px-1 text-sm font-medium">How is the price set?</legend>
+            {([
+              ["Fixed", "Fixed price", "The price below is filled in at the till. Sellers cannot change it."],
+              ["Manual", "Typed when selling", "The seller types the price each time (e.g. wound dressing depends on the wound)."],
+            ] as const).map(([value, label, hint]) => (
+              <label key={value} className="flex cursor-pointer items-start gap-2 text-sm">
+                <input type="radio" name="d-price-mode" className="mt-1 h-4 w-4" checked={form.priceMode === value}
+                  onChange={() => setForm((f) => ({ ...f, priceMode: value }))} />
+                <span>
+                  <span className="block font-medium">{label}</span>
+                  <span className="block text-xs text-muted-foreground">{hint}</span>
+                </span>
+              </label>
+            ))}
+          </fieldset>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="space-y-1">
+              <Label htmlFor="d-sell">{typedAtTill ? "Suggested price (TZS)" : "Price (TZS) *"}</Label>
+              <Input id="d-sell" type="number" min={0} step="any" inputMode="decimal" placeholder={typedAtTill ? "optional" : undefined}
+                value={form.sellingPrice} onChange={(e) => setForm((f) => ({ ...f, sellingPrice: e.target.value }))} />
+              {typedAtTill && <p className="text-xs text-muted-foreground">Shown as a hint at the till; the seller can type any price.</p>}
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="d-buy">Cost of materials (TZS)</Label>
+              <Input id="d-buy" type="number" min={0} step="any" inputMode="decimal" placeholder="optional" value={form.buyingPrice}
+                onChange={(e) => setForm((f) => ({ ...f, buyingPrice: e.target.value }))} />
+              <p className="text-xs text-muted-foreground">e.g. the syringe and gloves. Leave empty to count the whole price as profit.</p>
+            </div>
+          </div>
+          {sellsBelowCost && (
+            <p className="flex items-start gap-2 rounded-md border border-yellow-500/40 bg-yellow-500/10 p-2 text-xs text-yellow-700 dark:text-yellow-400">
+              <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+              The price is lower than the cost of materials, so every time you give this service you lose money.
+            </p>
+          )}
+          <p className="text-xs text-muted-foreground">
+            A service has no stock: it is never counted, never runs out and never expires, but its price is added to the
+            receipt and to your takings.
+          </p>
+        </>
+      )}
+      {!form.isService && (
+        <>
       <div className="space-y-1">
         <Label htmlFor="d-brand">Brand</Label>
         <Input id="d-brand" placeholder="e.g. Panadol (the same medicine can be stocked under several brands)" value={form.brand}
@@ -350,12 +479,14 @@ function DrugFormBody({ pharmacyId, editing, categories, onClose, onOpenExisting
         />
         <Label htmlFor="d-prescription">Requires Prescription</Label>
       </div>
+        </>
+      )}
       <DialogFooter>
         <Button type="button" variant="outline" onClick={onClose}>
           Cancel
         </Button>
         <Button type="submit" disabled={saveMutation.isPending}>
-          {saveMutation.isPending ? "Saving…" : editing ? "Save changes" : "Add Drug"}
+          {saveMutation.isPending ? "Saving…" : editing ? "Save changes" : form.isService ? "Add Service" : "Add Drug"}
         </Button>
       </DialogFooter>
     </form>
