@@ -11,6 +11,7 @@ import { pharmacyApi } from "@/api/pharmacy.api";
 import { adminSupportApi } from "@/api/admin.api";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { SupportBanner, SupportGate, supportKey } from "@/components/admin/support-session";
+import { AnnouncementBanner } from "@/components/support/announcement-banner";
 import { SUBSCRIPTION_REQUIRED_EVENT } from "@/lib/api";
 import { Loader2, Clock, ShieldX, CreditCard } from "lucide-react";
 import type { PharmacyResponse } from "@/types";
@@ -148,6 +149,7 @@ export default function DashboardLayout({ children, params }: DashboardLayoutPro
       <div className="flex flex-1 flex-col overflow-hidden">
         {isAdmin && support.data && <SupportBanner session={support.data} pharmacyName={pharmacy?.name} status={pharmacy?.status} />}
         <Header pharmacyId={pharmacyId} />
+        <AnnouncementBanner pharmacyId={pharmacyId} />
         <main className="flex-1 overflow-y-auto p-6">
           {children}
         </main>
