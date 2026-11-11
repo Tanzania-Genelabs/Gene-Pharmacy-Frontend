@@ -26,6 +26,10 @@ import type {
   AdminCreateUserRequest,
   AdminUpdateUserRequest,
   SupportSession,
+  MaintenanceRun,
+  SupportRequest,
+  Announcement,
+  MaintenanceTask,
   BulkResult,
   BusinessReport,
 } from "@/types";
@@ -329,4 +333,38 @@ export const adminCatalogApi = {
       .post<CatalogImportResult>("/api/v1/admin/catalog/import", form, { headers: { "Content-Type": "multipart/form-data" } })
       .then((r) => r.data);
   },
+};
+
+// ─── Admin: maintenance tasks (carried out by the background worker) ─────────
+
+export const adminMaintenanceApi = {
+  tasks: () => api.get<MaintenanceTask[]>("/api/v1/admin/maintenance/tasks").then((r) => r.data),
+
+  runs: (params?: { page?: number; size?: number }) =>
+    api.get<Page<MaintenanceRun>>("/api/v1/admin/maintenance/runs", { params }).then((r) => r.data),
+
+  start: (data: { task: string; params: Record<string, string>; dryRun: boolean; reason: string }) =>
+    api.post<MaintenanceRun>("/api/v1/admin/maintenance/runs", data).then((r) => r.data),
+
+  cancel: (runId: string) => api.post<MaintenanceRun>(`/api/v1/admin/maintenance/runs/${runId}/cancel`).then((r) => r.data),
+};
+
+// ─── Admin: pharmacies' help requests and notices to pharmacies ─────────────
+
+export const adminRequestApi = {
+  list: (params?: { status?: string; page?: number; size?: number }) =>
+    api.get<Page<SupportRequest> & { openCount: number }>("/api/v1/admin/support-requests", { params }).then((r) => r.data),
+
+  resolve: (id: string, status: "Resolved" | "Rejected", note: string) =>
+    api.post<SupportRequest>(`/api/v1/admin/support-requests/${id}/resolve`, { status, note }).then((r) => r.data),
+};
+
+export const adminAnnouncementApi = {
+  list: (params?: { page?: number; size?: number }) =>
+    api.get<Page<Announcement>>("/api/v1/admin/announcements", { params }).then((r) => r.data),
+
+  create: (data: { title: string; message: string; level: "info" | "warning"; pharmacyIds?: string[]; startsAt?: string; endsAt?: string }) =>
+    api.post<Announcement>("/api/v1/admin/announcements", data).then((r) => r.data),
+
+  end: (id: string) => api.post<Announcement>(`/api/v1/admin/announcements/${id}/end`).then((r) => r.data),
 };
