@@ -9,7 +9,9 @@ import { inventoryApi } from "@/api/inventory.api";
 import { insightsApi } from "@/api/insights.api";
 import { PeriodPicker } from "@/components/insights/period-picker";
 import { money } from "@/components/expenses/format";
-import { dayHeading, isValidRange, presetRange, rangeInstants, rangeLabel, ymd, type DateRange, type PeriodPreset } from "@/lib/periods";
+import { dayHeading, isValidRange, parseYmd, presetRange, rangeLabel, ymd, type DateRange, type PeriodPreset } from "@/lib/periods";
+import { useBusinessToday } from "@/lib/business-day";
+import { RequestHelpDialog, type HelpContext } from "@/components/support/request-help-dialog";
 import { useAuthStore } from "@/store/auth.store";
 import { toast } from "sonner";
 import {
@@ -36,6 +38,8 @@ interface CartItem {
   unitPrice: number; quantity: number; discountPct: number;
   /** Sold by the half dose: quantity counts halves and unitPrice is the half-dose price. */
   halfDose: boolean;
+  /** A service (injection, dressing): never counted as stock. manualPrice: the seller types the price here. */
+  isService: boolean; manualPrice: boolean;
   /** Quantity and unitPrice are per single unit (e.g. tablet); info lets the till also sell whole packs. */
   info: PackInfo;
 }
@@ -106,16 +110,28 @@ interface SalesTableProps {
   isSeller: boolean;
   onView: (saleId: string) => void;
   onVoid: (sale: SaleSummaryResponse) => void;
+  /** Gene Pharmacy support only: tick receipts to move them to another business day. */
+  selected?: Set<string>;
+  onSelect?: (ids: string[], on: boolean) => void;
 }
 
 /** The receipts list shared by "Today's Sales" and "Sales History". */
-function SalesTable({ sales, loading, emptyText, isSeller, onView, onVoid }: SalesTableProps) {
+function SalesTable({ sales, loading, emptyText, isSeller, onView, onVoid, selected, onSelect }: SalesTableProps) {
+  const selectable = !!onSelect && !!selected;
+  const cols = selectable ? 9 : 8;
+  const allTicked = selectable && !!sales?.length && sales.every((s) => selected.has(s.id));
   return (
     <Card>
       <CardContent className="p-0">
         <Table>
           <TableHeader>
             <TableRow>
+              {selectable && (
+                <TableHead className="w-8">
+                  <input type="checkbox" aria-label="Select all receipts" className="h-4 w-4 accent-primary" checked={allTicked}
+                    onChange={(e) => onSelect(sales?.map((s) => s.id) ?? [], e.target.checked)} />
+                </TableHead>
+              )}
               <TableHead>Receipt #</TableHead>
               <TableHead>Branch</TableHead>
               <TableHead>Items</TableHead>
@@ -129,19 +145,25 @@ function SalesTable({ sales, loading, emptyText, isSeller, onView, onVoid }: Sal
           <TableBody>
             {loading ? (
               Array.from({ length: 8 }).map((_, i) => (
-                <TableRow key={i}>{Array.from({ length: 8 }).map((_, j) => (
+                <TableRow key={i}>{Array.from({ length: cols }).map((_, j) => (
                   <TableCell key={j}><div className="h-4 w-full bg-muted animate-pulse rounded" /></TableCell>
                 ))}</TableRow>
               ))
             ) : !sales?.length ? (
               <TableRow>
-                <TableCell colSpan={8} className="text-center py-16 text-muted-foreground">
+                <TableCell colSpan={cols} className="text-center py-16 text-muted-foreground">
                   <ShoppingCart className="h-8 w-8 mx-auto mb-2 opacity-25" />
                   <p>{emptyText}</p>
                 </TableCell>
               </TableRow>
             ) : sales.map((sale) => (
               <TableRow key={sale.id} className={cn("hover:bg-accent/40", sale.status === "Voided" && "opacity-60 [&_td:not(:last-child)]:line-through")}>
+                {selectable && (
+                  <TableCell>
+                    <input type="checkbox" aria-label={`Select receipt ${sale.receiptNumber}`} className="h-4 w-4 accent-primary"
+                      checked={selected.has(sale.id)} onChange={(e) => onSelect([sale.id], e.target.checked)} />
+                  </TableCell>
+                )}
                 <TableCell className="font-mono text-xs">{sale.receiptNumber}</TableCell>
                 <TableCell className="text-sm text-muted-foreground">{sale.branchName ?? `${sale.branchId.slice(0, 8)}…`}</TableCell>
                 <TableCell><SaleItemsCell sale={sale} /></TableCell>
@@ -157,7 +179,12 @@ function SalesTable({ sales, loading, emptyText, isSeller, onView, onVoid }: Sal
                   )}
                 </TableCell>
                 <TableCell><Badge variant={STATUS_VARIANT[sale.status] ?? "secondary"} className="text-xs">{sale.status}</Badge></TableCell>
-                <TableCell className="text-xs text-muted-foreground">{fmtDate(sale.saleDate)}</TableCell>
+                <TableCell className="text-xs text-muted-foreground">
+                  {fmtDate(sale.saleDate)}
+                  {sale.businessDate && sale.businessDate !== ymd(new Date(sale.saleDate)) && (
+                    <div className="text-[11px]">Counted on {parseYmd(sale.businessDate).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}{sale.businessDateMovedAt ? " (moved by support)" : ""}</div>
+                  )}
+                </TableCell>
                 <TableCell>
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
@@ -266,6 +293,20 @@ export default function SalesPage({ params }: PageProps) {
 
   // Sellers are bound to a single branch at account creation — no choice needed.
   const isSeller = user?.role === "Seller";
+  // Gene Pharmacy support (inside a support session) can move chosen receipts to another business day.
+  const isSupport = user?.role === "SuperAdmin";
+  const [picked, setPicked] = useState<Set<string>>(() => new Set());
+  // Owners and managers ask Gene Pharmacy to correct a day (they may not move sales themselves).
+  const canAskHelp = user?.role === "Owner" || user?.role === "Manager";
+  const [help, setHelp] = useState<HelpContext | null>(null);
+  const [moveOpen, setMoveOpen] = useState(false);
+  const [moveDate, setMoveDate] = useState("");
+  const [moveReason, setMoveReason] = useState("");
+  const pick = useCallback((ids: string[], on: boolean) => setPicked((prev) => {
+    const next = new Set(prev);
+    for (const id of ids) { if (on) next.add(id); else next.delete(id); }
+    return next;
+  }), []);
 
   const [tab, setTab] = useState<"pos" | "today" | "history">("pos");
   // Owners and managers pick a branch once; it is remembered on this device until they change it.
@@ -326,13 +367,14 @@ export default function SalesPage({ params }: PageProps) {
     queryFn: () => drugApi.list(pharmacyId, { page: 0, size: 200, search: search || undefined }),
     placeholderData: (prev) => prev,
   });
-  const histRange = presetRange(histPreset, histCustom);
+  // "Today" is the shop's business day from the server: after midnight a shop still trading stays on its day.
+  const businessToday = useBusinessToday(pharmacyId);
+  const businessNow = parseYmd(businessToday);
+  const histRange = presetRange(histPreset, histCustom, businessNow);
   const histRangeValid = isValidRange(histRange);
   // Sellers only ever see their own branch; the server enforces this too.
   const histBranchId = isSeller ? (user?.branchId ?? "") : (histBranch ?? branchId);
   const histBranchParam = histBranchId || undefined;
-  // The first and last instant of the chosen days on this device's clock.
-  const histInstants = histRangeValid ? rangeInstants(histRange) : null;
   // Day headers and totals: one row per day that had sales, worked out on the server.
   const { data: histDays, isLoading: histDaysLoading, isError: histDaysError } = useQuery({
     queryKey: ["sales", pharmacyId, "days", histRange.from, histRange.to, histBranchParam ?? "all"],
@@ -342,22 +384,23 @@ export default function SalesPage({ params }: PageProps) {
   });
   // The receipts themselves, 200 at a time.
   const historyQuery = useInfiniteQuery({
-    queryKey: ["sales", pharmacyId, "history", histInstants?.from, histInstants?.to, histBranchParam ?? "all", refQuery],
+    queryKey: ["sales", pharmacyId, "history", histRange.from, histRange.to, histBranchParam ?? "all", refQuery],
     queryFn: ({ pageParam }) =>
       // A reference search looks through all dates.
       salesApi.list(pharmacyId, refQuery
         ? { page: pageParam, size: 200, branchId: histBranchParam, paymentReference: refQuery }
-        : { page: pageParam, size: 200, from: histInstants!.from, to: histInstants!.to, branchId: histBranchParam }),
+        : { page: pageParam, size: 200, businessFrom: histRange.from, businessTo: histRange.to, branchId: histBranchParam }),
     initialPageParam: 0,
     getNextPageParam: (last) => (last.last || last.number + 1 >= last.totalPages ? undefined : last.number + 1),
-    enabled: tab === "history" && !!histInstants,
+    enabled: tab === "history" && histRangeValid,
   });
   const histSales = useMemo(() => historyQuery.data?.pages.flatMap((p) => p.content) ?? [], [historyQuery.data]);
   const histTotalReceipts = historyQuery.data?.pages[0]?.totalElements ?? 0;
   const histSalesByDay = useMemo(() => {
     const map = new Map<string, SaleSummaryResponse[]>();
     for (const sale of histSales) {
-      const key = ymd(new Date(sale.saleDate));
+      // Grouped by the day the sale is counted on, the same day the totals above use.
+      const key = sale.businessDate ?? ymd(new Date(sale.saleDate));
       const list = map.get(key);
       if (list) list.push(sale);
       else map.set(key, [sale]);
@@ -373,19 +416,10 @@ export default function SalesPage({ params }: PageProps) {
   }, [histDays, histSalesByDay]);
   const histShowProfit = !isSeller && histDays?.totals.profit != null;
 
-  // "Today" is the caller's own calendar day, so it starts and ends at local midnight whatever the server's clock says.
-  const todayKey = new Date().toDateString();
-  const todayRange = useMemo(() => {
-    const now = new Date();
-    return {
-      from: new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString(),
-      to: new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999).toISOString(),
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [todayKey]);
+  // "Today" is the shop's business day, so sales made after midnight while the shop is still open stay on it.
   const { data: today, isLoading: todayLoading } = useQuery({
-    queryKey: ["sales", pharmacyId, "today", todayKey],
-    queryFn: () => salesApi.list(pharmacyId, { page: 0, size: 200, from: todayRange.from, to: todayRange.to }),
+    queryKey: ["sales", pharmacyId, "today", businessToday],
+    queryFn: () => salesApi.list(pharmacyId, { page: 0, size: 200, businessDate: businessToday }),
     placeholderData: (prev) => prev,
     enabled: tab === "today",
     refetchInterval: 30_000,
@@ -414,7 +448,9 @@ export default function SalesPage({ params }: PageProps) {
   const stockByDrug = useMemo(() => new Map((stockPage?.content ?? []).map((s) => [s.drugId, s])), [stockPage]);
 
   /** How many units can be sold, whether it is running low, and whether that is known yet. */
-  const stockOf = useCallback((drug: Pick<DrugResponse, "id" | "reorderLevel">) => {
+  const stockOf = useCallback((drug: Pick<DrugResponse, "id" | "reorderLevel" | "isService">) => {
+    // A service has no stock: it is never out, low or limited.
+    if (drug.isService) return { known: false, quantity: Infinity, reorderLevel: 0, out: false, low: false };
     const row = stockByDrug.get(drug.id);
     const quantity = Math.max(0, row?.quantity ?? 0);
     const reorderLevel = row?.reorderLevel ?? drug.reorderLevel ?? 0;
@@ -445,7 +481,7 @@ export default function SalesPage({ params }: PageProps) {
     setCart((prev) => {
       const idx = prev.findIndex((i) => cartKey(i.drugId, i.halfDose) === key);
       if (idx >= 0) { const n = [...prev]; n[idx] = { ...n[idx], quantity: n[idx].quantity + units }; return n; }
-      return [...prev, { drugId: drug.id, drugName: drug.name, unitPrice: halfDose ? (drug.halfDosePrice as number) : drug.sellingPrice, quantity: units, discountPct: 0, halfDose, info: packInfo(drug) }];
+      return [...prev, { drugId: drug.id, drugName: drug.name, unitPrice: halfDose ? (drug.halfDosePrice as number) : (drug.sellingPrice ?? 0), quantity: units, discountPct: 0, halfDose, isService: !!drug.isService, manualPrice: !!drug.isService && drug.priceMode === "Manual", info: packInfo(drug) }];
     });
   }, [branchId, cart, stockOf, stockUsedBy]);
 
@@ -454,7 +490,7 @@ export default function SalesPage({ params }: PageProps) {
     if (!line) return;
     if (qty <= 0) { setCart((p) => p.filter((i) => cartKey(i.drugId, i.halfDose) !== key)); return; }
     const row = stockByDrug.get(line.drugId);
-    if (!stockLoading && branchId) {
+    if (!line.isService && !stockLoading && branchId) {
       // The most this line can have is what is left after the drug's other line, counted in this line's doses.
       const room = Math.max(0, (row?.quantity ?? 0) - stockUsedBy(line.drugId, key));
       const max = Math.floor(line.halfDose ? room * 2 : room);
@@ -501,6 +537,23 @@ export default function SalesPage({ params }: PageProps) {
     onError: () => toast.error("Failed to void sale"),
   });
 
+  const moveMutation = useMutation({
+    mutationFn: () => salesApi.moveBusinessDay(pharmacyId, { saleIds: [...picked], targetDate: moveDate, reason: moveReason.trim() }),
+    onSuccess: (r) => {
+      toast.success(`${r.moved} sale${r.moved === 1 ? "" : "s"} moved to ${r.targetDate}${r.unchanged ? ` (${r.unchanged} already there)` : ""}`);
+      setMoveOpen(false); setMoveReason(""); setPicked(new Set());
+      qc.invalidateQueries({ queryKey: ["sales", pharmacyId] });
+    },
+    onError: (e) => toast.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message ?? "Could not move the sales"),
+  });
+  const openMove = () => {
+    // Suggest the day before the day the first chosen receipt is counted on: the usual "after midnight" fix.
+    const first = histSales.find((sale) => picked.has(sale.id));
+    const day = parseYmd(first?.businessDate ?? businessToday);
+    setMoveDate(ymd(new Date(day.getFullYear(), day.getMonth(), day.getDate() - 1)));
+    setMoveOpen(true);
+  };
+
   async function viewDetail(saleId: string) {
     setDetailLoading(true);
     try { setDetailSale(await salesApi.getById(pharmacyId, saleId)); }
@@ -520,6 +573,8 @@ export default function SalesPage({ params }: PageProps) {
     if (cart.length === 0) { toast.error("Cart is empty"); return; }
     if (!branchId) { toast.error("Select a branch first"); return; }
     if (!user?.id) { toast.error("Not authenticated"); return; }
+    const unpriced = cart.find((i) => i.manualPrice && i.unitPrice <= 0);
+    if (unpriced) { toast.error(`Type the price for ${unpriced.drugName}`); return; }
     const paid = parseFloat(amountPaid) || netTotal;
     if (paid < netTotal) { toast.error(`Amount paid (TZS ${fmt(paid)}) is less than total (TZS ${fmt(netTotal)})`); return; }
     completeSaleMutation.mutate({
@@ -689,8 +744,14 @@ export default function SalesPage({ params }: PageProps) {
                         </div>
                         <p className="font-semibold text-xs leading-tight line-clamp-2 mb-1">{drug.name}</p>
                         {drug.genericName && <p className="text-[10px] text-muted-foreground truncate mb-1">{drug.genericName}</p>}
-                        <p className="text-sm font-bold text-primary">TZS {fmt(drug.sellingPrice)}</p>
-                        <p className="text-[10px] text-muted-foreground">per {drug.unit}</p>
+                        {drug.isService && drug.priceMode === "Manual" ? (
+                          <p className="text-sm font-bold text-primary">Price typed at sale</p>
+                        ) : (
+                          <p className="text-sm font-bold text-primary">TZS {fmt(drug.sellingPrice)}</p>
+                        )}
+                        {drug.isService
+                          ? <span className="mt-1.5 inline-flex items-center rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">Service</span>
+                          : <p className="text-[10px] text-muted-foreground">per {drug.unit}</p>}
                         {stock.known && (
                           <StockBadge
                             className="mt-1.5"
@@ -833,7 +894,10 @@ export default function SalesPage({ params }: PageProps) {
                           {!item.halfDose && hasPacks(item.info) && (
                             <p className="text-[10px] text-muted-foreground">{formatQuantity(item.quantity, item.info)}</p>
                           )}
-                          {branchId && !stockLoading && (() => {
+                          {item.isService && (
+                            <span className="mt-1 inline-flex items-center rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">Service</span>
+                          )}
+                          {!item.isService && branchId && !stockLoading && (() => {
                             const row = stockByDrug.get(item.drugId);
                             const onShelf = Math.max(0, row?.quantity ?? 0);
                             return (
@@ -867,7 +931,7 @@ export default function SalesPage({ params }: PageProps) {
                           />
                           <button
                             className="px-1.5 py-0.5 hover:bg-accent transition-colors disabled:cursor-not-allowed disabled:opacity-40"
-                            disabled={!stockLoading && !!branchId && stockUsedBy(item.drugId) + (item.halfDose ? 0.5 : 1) > Math.max(0, stockByDrug.get(item.drugId)?.quantity ?? 0)}
+                            disabled={!item.isService && !stockLoading && !!branchId && stockUsedBy(item.drugId) + (item.halfDose ? 0.5 : 1) > Math.max(0, stockByDrug.get(item.drugId)?.quantity ?? 0)}
                             onClick={() => updateQty(key, item.quantity + 1)}
                           >
                             <Plus className="h-3 w-3" />
@@ -901,6 +965,18 @@ export default function SalesPage({ params }: PageProps) {
                         </div>
                         <p className="text-xs font-bold text-primary ml-auto whitespace-nowrap">TZS {fmt(lineTotal)}</p>
                       </div>
+                      {item.manualPrice && (
+                        <div className="flex items-center gap-1">
+                          <span className="text-[10px] text-muted-foreground">Price (TZS)</span>
+                          <input
+                            type="number" min={0}
+                            className="w-24 h-6 border border-input rounded text-xs text-center bg-transparent focus:outline-none focus:ring-1 focus:ring-ring"
+                            value={item.unitPrice || ""}
+                            placeholder="Type price"
+                            onChange={(e) => setCart((p) => p.map((i) => cartKey(i.drugId, i.halfDose) === key ? { ...i, unitPrice: Math.max(0, Number(e.target.value) || 0) } : i))}
+                          />
+                        </div>
+                      )}
                       <p className="text-[10px] text-muted-foreground">
                         {fmt(item.unitPrice)} × {item.quantity} {item.halfDose ? "½ dose" : item.info.unit}{item.discountPct > 0 ? ` − ${item.discountPct}% disc` : ""}
                       </p>
@@ -980,7 +1056,7 @@ export default function SalesPage({ params }: PageProps) {
             </CardContent></Card>
           </div>
           <p className="text-sm text-muted-foreground">
-            {new Date().toLocaleDateString("en-TZ", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}
+            {businessNow.toLocaleDateString("en-TZ", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}
             {today && today.totalElements > today.content.length && ` · showing the latest ${today.content.length} of ${today.totalElements}; totals cover only these`}
           </p>
           <SalesTable
@@ -1102,6 +1178,16 @@ export default function SalesPage({ params }: PageProps) {
             </>
           )}
 
+          {isSupport && picked.size > 0 && (
+            <div className="sticky top-2 z-10 flex flex-wrap items-center justify-between gap-2 rounded-md border border-primary/40 bg-primary/5 px-4 py-2 text-sm">
+              <span><strong>{picked.size}</strong> receipt{picked.size === 1 ? "" : "s"} selected (support)</span>
+              <span className="flex gap-2">
+                <Button size="sm" variant="outline" onClick={() => setPicked(new Set())}>Clear</Button>
+                <Button size="sm" onClick={openMove}>Move to another day…</Button>
+              </span>
+            </div>
+          )}
+
           {!histRangeValid ? null : historyQuery.isLoading || (histByDay && !refQuery && histDaysLoading) ? (
             <SalesTable sales={undefined} loading emptyText="" isSeller={isSeller} onView={viewDetail} onVoid={() => {}} />
           ) : (!histByDay || !!refQuery) ? (
@@ -1112,6 +1198,8 @@ export default function SalesPage({ params }: PageProps) {
               isSeller={isSeller}
               onView={viewDetail}
               onVoid={(sale) => { setVoidTarget(sale); setVoidReason(""); }}
+              selected={isSupport ? picked : undefined}
+              onSelect={isSupport ? pick : undefined}
             />
           ) : histDayRows.length === 0 ? (
             <Card><CardContent className="py-16 text-center text-muted-foreground">
@@ -1128,7 +1216,7 @@ export default function SalesPage({ params }: PageProps) {
                 return (
                   <section key={date} className="space-y-2">
                     <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 border-b border-border pb-1">
-                      <h3 className="font-semibold">{dayHeading(date)}</h3>
+                      <h3 className="font-semibold">{dayHeading(date, businessNow)}</h3>
                       <div className="flex flex-wrap gap-x-4 text-sm text-muted-foreground">
                         <span>{count} sale{count === 1 ? "" : "s"}</span>
                         <span className="font-semibold text-foreground tabular-nums">{money(total)}</span>
@@ -1138,6 +1226,15 @@ export default function SalesPage({ params }: PageProps) {
                           </span>
                         )}
                         {day && day.voidedCount > 0 && <span>{day.voidedCount} voided</span>}
+                        {canAskHelp && (
+                          <button
+                            type="button"
+                            className="text-xs underline underline-offset-2 hover:text-foreground"
+                            onClick={() => setHelp({ kind: "MoveSales", businessDate: date, branchId: histBranchParam, saleIds: rows.map((r) => r.id).slice(0, 200), about: `Sales of ${dayHeading(date, businessNow)}` })}
+                          >
+                            Something wrong with this day?
+                          </button>
+                        )}
                       </div>
                     </div>
                     {rows.length > 0 ? (
@@ -1148,6 +1245,8 @@ export default function SalesPage({ params }: PageProps) {
                         isSeller={isSeller}
                         onView={viewDetail}
                         onVoid={(sale) => { setVoidTarget(sale); setVoidReason(""); }}
+                        selected={isSupport ? picked : undefined}
+                        onSelect={isSupport ? pick : undefined}
                       />
                     ) : (
                       <p className="text-sm text-muted-foreground">Press &quot;Load more&quot; below to see this day&apos;s receipts.</p>
@@ -1194,6 +1293,35 @@ export default function SalesPage({ params }: PageProps) {
                 <Printer className="h-4 w-4 mr-2" />Print Receipt
               </Button>
             )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <RequestHelpDialog pharmacyId={pharmacyId} context={help} onClose={() => setHelp(null)} />
+
+      {/* ── Move to another business day (Gene Pharmacy support only) ───── */}
+      <Dialog open={moveOpen} onOpenChange={(o) => !o && setMoveOpen(false)}>
+        <DialogContent className="sm:max-w-md" aria-describedby={undefined}>
+          <DialogHeader><DialogTitle>Move {picked.size} receipt{picked.size === 1 ? "" : "s"} to another day</DialogTitle></DialogHeader>
+          <div className="px-6 py-2 space-y-3">
+            <p className="text-sm text-muted-foreground">
+              Only the business day the sales are counted on changes. Sale time, money, stock and loyalty stay as they are.
+              Each receipt is written to the pharmacy&apos;s audit log with your reason.
+            </p>
+            <div className="space-y-1">
+              <Label>Count these sales on</Label>
+              <Input type="date" value={moveDate} max={businessToday} onChange={(e) => setMoveDate(e.target.value)} />
+            </div>
+            <div className="space-y-1">
+              <Label>Reason * (at least 10 characters)</Label>
+              <Input placeholder="e.g. Shop open till 3am, forgot to open a shift" value={moveReason} maxLength={500} onChange={(e) => setMoveReason(e.target.value)} />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setMoveOpen(false)}>Cancel</Button>
+            <Button disabled={!moveDate || moveReason.trim().length < 10 || moveMutation.isPending} onClick={() => moveMutation.mutate()}>
+              {moveMutation.isPending ? "Moving…" : "Move sales"}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
