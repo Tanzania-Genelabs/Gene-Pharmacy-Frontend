@@ -18,6 +18,9 @@ import {
   ChevronLeft,
   ChevronRight,
   Pill,
+  Wrench,
+  Inbox,
+  Megaphone,
 } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -38,7 +41,10 @@ const NAV_ITEMS: NavItem[] = [
   { label: "Payments", href: "/admin/payments", icon: Wallet },
   { label: "Plans & Pricing", href: "/admin/billing-plans", icon: Banknote },
   { label: "Business Reports", href: "/admin/reports", icon: LineChart },
+  { label: "Requests", href: "/admin/requests", icon: Inbox },
   { label: "Support Sessions", href: "/admin/support", icon: LifeBuoy },
+  { label: "Announcements", href: "/admin/announcements", icon: Megaphone },
+  { label: "Maintenance", href: "/admin/maintenance", icon: Wrench },
   { label: "Audit Logs", href: "/admin/audit-logs", icon: Shield },
   { label: "Settings", href: "/admin/settings", icon: Settings },
 ];
