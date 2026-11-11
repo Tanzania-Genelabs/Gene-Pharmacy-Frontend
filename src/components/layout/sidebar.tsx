@@ -27,6 +27,7 @@ import {
   ScanBarcode,
   Wallet,
   Rocket,
+  LifeBuoy,
 } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -88,6 +89,7 @@ function buildNavItems(pharmacyId: string): NavItem[] {
     { label: "Users",            href: `/${pharmacyId}/users`,             icon: Users,           roles: OWNER_AND_ABOVE },
     { label: "Audit Logs",       href: `/${pharmacyId}/audit-logs`,        icon: Shield,          roles: OWNER_AND_ABOVE },
     { label: "Branches",         href: `/${pharmacyId}/branches`,          icon: Building2,       roles: OWNER_AND_ABOVE },
+    { label: "Help requests",    href: `/${pharmacyId}/help`,              icon: LifeBuoy,        roles: ["Owner", "Manager"] },
   ];
 }
 
