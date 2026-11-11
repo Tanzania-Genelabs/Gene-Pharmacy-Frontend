@@ -25,6 +25,8 @@ import {
 import { toast } from "sonner";
 import { ProfitStatement } from "@/components/expenses/profit-statement";
 import { CashFlowTable } from "@/components/expenses/cash-flow-table";
+import { useBusinessToday } from "@/lib/business-day";
+import { parseYmd, ymd } from "@/lib/periods";
 
 interface PageProps {
   params: Promise<{ pharmacyId: string }>;
@@ -50,11 +52,12 @@ function downloadBlob(blob: Blob, filename: string) {
 export default function ReportsPage({ params }: PageProps) {
   const { pharmacyId } = use(params);
 
-  const today = new Date().toISOString().split("T")[0];
-  const thirtyAgo = new Date(Date.now() - 30 * 86400000).toISOString().split("T")[0];
-
-  const [from, setFrom] = useState(thirtyAgo);
-  const [to, setTo] = useState(today);
+  // Until a date is picked, the range ends on the shop's business day (it stays on its day past midnight).
+  const businessToday = useBusinessToday(pharmacyId);
+  const [fromInput, setFrom] = useState("");
+  const [toInput, setTo] = useState("");
+  const to = toInput || businessToday;
+  const from = fromInput || (() => { const d = parseYmd(to); return ymd(new Date(d.getFullYear(), d.getMonth(), d.getDate() - 30)); })();
 
   const dateParams = { from, to };
 
