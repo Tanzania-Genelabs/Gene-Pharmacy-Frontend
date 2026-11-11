@@ -730,6 +730,65 @@ export interface SaleSummaryResponse {
   branchName?: string | null;
   /** What was sold, so a receipt row can show it without opening the receipt. */
   items?: { drugId: string; drugName: string | null; quantity: number; isHalfDose: boolean; lineTotal: number }[];
+  /** The business day the sale is counted on (Y-m-d); after midnight it can be the day before the sale time. */
+  businessDate?: string | null;
+  /** Set when Gene Pharmacy support moved the sale to another business day. */
+  businessDateMovedAt?: string | null;
+}
+
+/** GET /pharmacies/{id}/business-day: what "today" means for the shop right now. */
+export interface BusinessDay {
+  date: string;
+  calendarDate: string;
+  cutoffTime: string;
+  stillOpenPastDayEnd: boolean;
+  branchId: string | null;
+  serverTime: string;
+}
+
+export interface MoveSalesDayResult {
+  moved: number;
+  unchanged: number;
+  targetDate: string;
+  fromDates: Record<string, number>;
+}
+
+export interface MaintenanceField {
+  name: string;
+  label: string;
+  type: "pharmacy" | "branch" | "date" | "boolean" | "text";
+  required: boolean;
+  help?: string;
+}
+
+export interface MaintenanceTask {
+  key: string;
+  label: string;
+  description: string;
+  fields: MaintenanceField[];
+  supportsDryRun: boolean;
+}
+
+export type MaintenanceRunStatus = "Pending" | "Running" | "Completed" | "Failed" | "Cancelled";
+
+export interface MaintenanceRun {
+  id: string;
+  task: string;
+  taskLabel: string;
+  params: Record<string, string>;
+  pharmacyName: string | null;
+  status: MaintenanceRunStatus;
+  dryRun: boolean;
+  progressDone: number;
+  progressTotal: number;
+  result: Record<string, unknown> | null;
+  error: string | null;
+  reason: string;
+  requestedByEmail: string | null;
+  cancelRequested: boolean;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
 }
 
 export interface VoidSaleRequest {
@@ -980,7 +1039,10 @@ export type NotificationType =
   | "ExpiryAlert"
   | "SaleProcessed"
   | "OrderReceived"
-  | "SystemAlert";
+  | "SystemAlert"
+  | "StockShortfall"
+  /** The day is still open and the system will close it soon without a cash count. */
+  | "DayNotClosed";
 
 export type NotificationStatus = "Pending" | "Sent" | "Failed";
 
@@ -1964,4 +2026,57 @@ export interface OwnerDashboardResponse {
     isBestDayLast90: boolean;
   };
   streak: { daysWithSales: number };
+}
+
+// ─── End-of-day report, help requests and Gene Pharmacy notices ─────────────
+
+/** GET /shifts/{id}/report. Money values are decimal strings. */
+export interface ShiftReport {
+  shift: ShiftResponse;
+  branchName: string | null;
+  pharmacyName: string | null;
+  openedByName: string | null;
+  closedByName: string | null;
+  salesCount: number;
+  salesTotal: string;
+  byPaymentMethod: { method: string; count: number; amount: string }[];
+  voidedCount: number;
+  voidedAmount: string;
+  expensesCount: number;
+  expensesTotal: string;
+  topItems: { name: string; quantity: number; amount: string }[];
+}
+
+export type SupportRequestKind = "MoveSales" | "ShiftCash" | "Other";
+export type SupportRequestStatus = "Open" | "Resolved" | "Rejected";
+
+export interface SupportRequest {
+  id: string;
+  pharmacyId: string;
+  pharmacyName: string | null;
+  branchId: string | null;
+  kind: SupportRequestKind;
+  message: string;
+  businessDate: string | null;
+  saleIds: string[];
+  shiftId: string | null;
+  status: SupportRequestStatus;
+  requestedByName: string | null;
+  adminNote: string | null;
+  resolvedByEmail: string | null;
+  resolvedAt: string | null;
+  createdAt: string;
+}
+
+export interface Announcement {
+  id: string;
+  title: string;
+  message: string;
+  level: "info" | "warning";
+  startsAt: string;
+  endsAt: string | null;
+  /** Admin view only. */
+  pharmacyIds?: string[];
+  live?: boolean;
+  createdByEmail?: string | null;
 }
