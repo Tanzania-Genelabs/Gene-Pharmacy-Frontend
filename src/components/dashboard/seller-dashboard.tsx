@@ -6,7 +6,7 @@ import { insightsApi } from "@/api/insights.api";
 import { inventoryApi } from "@/api/inventory.api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { money } from "@/components/expenses/format";
-import { ymd } from "@/lib/periods";
+import { useBusinessToday } from "@/lib/business-day";
 import { useAuthStore } from "@/store/auth.store";
 import { DashboardHeader } from "./dashboard-header";
 import { LatestSales } from "./latest-sales";
@@ -18,7 +18,8 @@ export function SellerDashboard({ pharmacyId }: { pharmacyId: string }) {
   const user = useAuthStore((s) => s.user);
   const branchId = user?.branchId ?? undefined;
   const now = new Date();
-  const todayKey = ymd(now);
+  // The shop's business day: a till still open after midnight keeps showing the day it is trading on.
+  const todayKey = useBusinessToday(pharmacyId, branchId);
 
   const { data: day, isLoading } = useQuery({
     queryKey: ["sales", "days", pharmacyId, todayKey, todayKey, branchId ?? "all"],
