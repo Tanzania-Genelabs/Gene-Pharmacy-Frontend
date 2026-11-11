@@ -29,6 +29,7 @@ const typeVariant: Partial<Record<NotificationType, string>> = {
   SaleProcessed: "text-emerald-600 dark:text-emerald-400",
   OrderReceived: "text-blue-600 dark:text-blue-400",
   SystemAlert: "text-blue-600 dark:text-blue-400",
+  DayNotClosed: "text-amber-600 dark:text-amber-400",
 };
 
 export default function NotificationsPage({ params }: PageProps) {
