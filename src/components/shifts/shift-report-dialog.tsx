@@ -36,7 +36,7 @@ export function ShiftReportDialog({ pharmacyId, shiftId, onClose }: { pharmacyId
           ) : isError || !data ? (
             <p className="py-6 text-sm text-red-600">Could not load the report.</p>
           ) : (
-            <pre className="max-h-[55vh] overflow-y-auto whitespace-pre-wrap rounded-md bg-muted p-3 font-sans text-sm leading-relaxed">{text.replace(/\*/g, "")}</pre>
+            <pre className="max-h-[55vh] overflow-y-auto whitespace-pre-wrap rounded-md bg-muted p-3 font-sans text-sm leading-relaxed">{text.replace(/\*/g, "").replace(/^_(.*)_$/gm, "$1")}</pre>
           )}
         </div>
         <DialogFooter className="gap-2">
