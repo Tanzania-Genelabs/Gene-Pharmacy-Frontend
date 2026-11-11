@@ -5,6 +5,8 @@ import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from "@tansta
 import { salesApi } from "@/api/sales.api";
 import { drugApi, drugCategoryApi } from "@/api/drug.api";
 import { branchApi } from "@/api/branch.api";
+import { pharmacyApi } from "@/api/pharmacy.api";
+import { BRAND_FOOTER } from "@/lib/brand";
 import { inventoryApi } from "@/api/inventory.api";
 import { insightsApi } from "@/api/insights.api";
 import { PeriodPicker } from "@/components/insights/period-picker";
@@ -211,12 +213,17 @@ function SalesTable({ sales, loading, emptyText, isSeller, onView, onVoid, selec
   );
 }
 
-function ReceiptContent({ sale, drugNames }: { sale: SaleResponse; drugNames?: Record<string, string> }) {
+/**
+ * The receipt: the pharmacy's own name on top, the Gene Pharmacy brand only as a small line at the bottom.
+ * Header and footer use inline styles because the print window has no Tailwind.
+ */
+function ReceiptContent({ sale, drugNames, pharmacyName, branchName }: { sale: SaleResponse; drugNames?: Record<string, string>; pharmacyName?: string; branchName?: string }) {
   return (
     <div className="font-mono text-xs leading-relaxed">
-      <div className="text-center mb-3">
-        <p className="font-bold text-sm">GENE PHARMACY</p>
-        <p className="text-muted-foreground">Official Receipt</p>
+      <div className="text-center mb-3" style={{ textAlign: "center" }}>
+        <p className="font-bold text-sm" style={{ fontWeight: 700, fontSize: 14, margin: 0 }}>{pharmacyName ?? "Pharmacy"}</p>
+        {branchName && <p style={{ margin: 0 }}>{branchName}</p>}
+        <p className="text-muted-foreground" style={{ margin: 0 }}>Official Receipt</p>
       </div>
       <div className="border-t border-dashed border-border my-2" />
       <div className="space-y-0.5 text-xs mb-2">
@@ -278,8 +285,11 @@ function ReceiptContent({ sale, drugNames }: { sale: SaleResponse; drugNames?: R
         )}
       </div>
       <div className="border-t border-dashed border-border my-2" />
-      <p className="text-center text-muted-foreground text-[11px] mt-1">
+      <p className="text-center text-muted-foreground text-[11px] mt-1" style={{ textAlign: "center" }}>
         Thank you for your purchase!<br />Keep this receipt for your records.
+      </p>
+      <p className="text-center text-muted-foreground text-[9px] mt-2" style={{ textAlign: "center", fontSize: 9, color: "#888", marginTop: 8 }}>
+        {BRAND_FOOTER}
       </p>
     </div>
   );
@@ -347,6 +357,8 @@ export default function SalesPage({ params }: PageProps) {
   const [detailLoading, setDetailLoading] = useState(false);
 
   const { data: branches } = useQuery({ queryKey: ["branches", pharmacyId], queryFn: () => branchApi.list(pharmacyId) });
+  // The pharmacy's name heads every receipt.
+  const { data: pharmacy } = useQuery({ queryKey: ["pharmacy", pharmacyId], queryFn: () => pharmacyApi.getById(pharmacyId), staleTime: 10 * 60_000 });
   // Restore the remembered branch once the list is known - and forget it if that branch was closed or removed.
   useEffect(() => {
     if (isSeller || !branches || branchId) return;
@@ -1282,7 +1294,12 @@ export default function SalesPage({ params }: PageProps) {
               <div className="space-y-2">{Array.from({ length: 6 }).map((_, i) => <div key={i} className="h-4 bg-muted animate-pulse rounded" />)}</div>
             ) : (receiptSale ?? detailSale) ? (
               <div ref={receiptRef}>
-                <ReceiptContent sale={(receiptSale ?? detailSale)!} drugNames={receiptSale ? receiptDrugNames : undefined} />
+                <ReceiptContent
+                  sale={(receiptSale ?? detailSale)!}
+                  drugNames={receiptSale ? receiptDrugNames : undefined}
+                  pharmacyName={pharmacy?.name}
+                  branchName={branches?.find((b) => b.id === (receiptSale ?? detailSale)!.branchId)?.name}
+                />
               </div>
             ) : null}
           </div>
