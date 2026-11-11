@@ -33,6 +33,7 @@ import {
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/store/auth.store";
 import { isValidRange, parseYmd, presetRange, rangeLabel, ymd, type DateRange, type PeriodPreset } from "@/lib/periods";
+import { useBusinessToday } from "@/lib/business-day";
 import type { ProfitGroup, ProfitPeriodRow } from "@/types";
 
 interface PageProps {
@@ -86,7 +87,9 @@ export default function AnalyticsPage({ params }: PageProps) {
   const [productSort, setProductSort] = useState<ProductSort>("most");
   const [showHelp, setShowHelp] = useState(false);
 
-  const range = presetRange(preset, custom);
+  // Periods count back from the shop's business day, which stays on its day past midnight while the shop trades.
+  const businessToday = useBusinessToday(pharmacyId);
+  const range = presetRange(preset, custom, parseYmd(businessToday));
   const rangeValid = isValidRange(range);
   const branchParam = branchId || undefined;
 
@@ -97,8 +100,8 @@ export default function AnalyticsPage({ params }: PageProps) {
 
   // Only used for the warning badges (sold below cost, heavy discounts, reorders) for today.
   const { data: summary } = useQuery({
-    queryKey: ["analytics", "daily-summary", pharmacyId, branchId],
-    queryFn: () => analyticsApi.dailySummary(pharmacyId, { date: ymd(new Date()), branchId: branchParam }),
+    queryKey: ["analytics", "daily-summary", pharmacyId, branchId, businessToday],
+    queryFn: () => analyticsApi.dailySummary(pharmacyId, { date: businessToday, branchId: branchParam }),
     refetchInterval: 60_000,
     enabled: canSeeProfit,
   });
