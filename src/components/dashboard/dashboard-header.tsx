@@ -3,7 +3,7 @@
 import { RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { dayHeading } from "@/lib/periods";
+import { dayHeading, parseYmd } from "@/lib/periods";
 import type { BranchResponse } from "@/types";
 import { greeting } from "./format";
 
@@ -41,7 +41,8 @@ export function DashboardHeader({
           {greeting(hour)}{firstName ? `, ${firstName}` : ""} 👋
         </h2>
         <p className="text-muted-foreground text-sm mt-1 truncate">
-          {dayHeading(todayKey)}
+          {/* todayKey is the shop's business day: it is "today" even when this clock has passed midnight. */}
+          {dayHeading(todayKey, parseYmd(todayKey))}
           {pharmacyName ? ` · ${pharmacyName}` : ""}
           {fixedBranchName ? ` · ${fixedBranchName}` : ""}
         </p>
