@@ -1,3 +1,4 @@
+import { BRAND_FOOTER } from "@/lib/brand";
 import type { ShiftReport } from "@/types";
 
 const PAYMENT_LABELS: Record<string, string> = {
@@ -49,5 +50,7 @@ export function dayReportText(r: ShiftReport): string {
     lines.push("");
     lines.push(by.charAt(0).toUpperCase() + by.slice(1));
   }
+  lines.push("");
+  lines.push(`_${BRAND_FOOTER}_`);
   return lines.join("\n");
 }
