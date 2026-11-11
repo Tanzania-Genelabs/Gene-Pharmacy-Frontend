@@ -37,6 +37,8 @@ const TYPE_ICON: Record<NotificationType, React.ElementType> = {
   SaleProcessed: ShoppingCart,
   OrderReceived: ShoppingCart,
   SystemAlert: Info,
+  StockShortfall: AlertTriangle,
+  DayNotClosed: Clock,
 };
 
 const TYPE_COLOR: Record<NotificationType, string> = {
@@ -45,6 +47,8 @@ const TYPE_COLOR: Record<NotificationType, string> = {
   SaleProcessed: "text-emerald-500",
   OrderReceived: "text-blue-500",
   SystemAlert: "text-blue-400",
+  StockShortfall: "text-destructive",
+  DayNotClosed: "text-amber-500",
 };
 
 function timeAgo(dateStr: string): string {
