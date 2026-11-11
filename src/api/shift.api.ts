@@ -1,5 +1,5 @@
 import api from "@/lib/api";
-import type { Page, ShiftResponse, OpenShiftRequest, CloseShiftRequest } from "@/types";
+import type { Page, ShiftResponse, OpenShiftRequest, CloseShiftRequest, ShiftReport } from "@/types";
 
 export const shiftApi = {
   open: (pharmacyId: string, data: OpenShiftRequest) =>
@@ -13,6 +13,18 @@ export const shiftApi = {
 
   getById: (pharmacyId: string, shiftId: string) =>
     api.get<ShiftResponse>(`/api/v1/pharmacies/${pharmacyId}/shifts/${shiftId}`).then((r) => r.data),
+
+  /** The end-of-day report of a shift, to read or share. */
+  report: (pharmacyId: string, shiftId: string) =>
+    api.get<ShiftReport>(`/api/v1/pharmacies/${pharmacyId}/shifts/${shiftId}/report`).then((r) => r.data),
+
+  /** Owners and managers: the cash counted for a shift that was closed without a count. */
+  recordCount: (pharmacyId: string, shiftId: string, closingCash: number, reason: string) =>
+    api.put<ShiftResponse>(`/api/v1/pharmacies/${pharmacyId}/shifts/${shiftId}/count`, { closingCash, reason }).then((r) => r.data),
+
+  /** Gene Pharmacy support only: open a shift closed by mistake again. */
+  reopen: (pharmacyId: string, shiftId: string, reason: string) =>
+    api.post<ShiftResponse>(`/api/v1/pharmacies/${pharmacyId}/shifts/${shiftId}/reopen`, { reason }).then((r) => r.data),
 
   list: (pharmacyId: string, params?: { page?: number; size?: number; branchId?: string; status?: string }) =>
     api.get<Page<ShiftResponse>>(`/api/v1/pharmacies/${pharmacyId}/shifts`, { params }).then((r) => r.data),
