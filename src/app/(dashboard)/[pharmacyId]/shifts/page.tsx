@@ -6,7 +6,11 @@ import { shiftApi } from "@/api/shift.api";
 import { branchApi } from "@/api/branch.api";
 import { useAuthStore } from "@/store/auth.store";
 import { toast } from "sonner";
-import { Clock, Play, Square, ChevronLeft, ChevronRight, AlertCircle } from "lucide-react";
+import { Clock, Play, Square, ChevronLeft, ChevronRight, AlertCircle, MoreHorizontal, FileText, Banknote, RotateCcw, LifeBuoy } from "lucide-react";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { ShiftReportDialog } from "@/components/shifts/shift-report-dialog";
+import { RequestHelpDialog, type HelpContext } from "@/components/support/request-help-dialog";
+import { apiErrorMessage } from "@/lib/errors";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -55,6 +59,16 @@ export default function ShiftsPage({ params }: PageProps) {
   const user = useAuthStore((s) => s.user);
   const isSeller = user?.role === "Seller";
   const isOwner = user?.role === "Owner";
+  const isSupport = user?.role === "SuperAdmin";
+  const canFix = !isSeller;
+
+  // End-of-day report, counting cash afterwards, support reopening a shift, asking Gene Pharmacy for help.
+  const [reportShiftId, setReportShiftId] = useState<string | null>(null);
+  const [countTarget, setCountTarget] = useState<ShiftResponse | null>(null);
+  const [countForm, setCountForm] = useState({ cash: "", reason: "" });
+  const [reopenTarget, setReopenTarget] = useState<ShiftResponse | null>(null);
+  const [reopenReason, setReopenReason] = useState("");
+  const [help, setHelp] = useState<HelpContext | null>(null);
 
   const [page, setPage] = useState(0);
 
@@ -108,6 +122,8 @@ export default function ShiftsPage({ params }: PageProps) {
     onSuccess: () => {
       toast.success("Shift opened successfully");
       qc.invalidateQueries({ queryKey: ["shifts", pharmacyId] });
+      // Opening or closing the day changes what "today" is for the shop.
+      qc.invalidateQueries({ queryKey: ["business-day", pharmacyId] });
       setShowOpen(false);
       setOpenForm({ branchId: user?.branchId ?? "", openingCash: "", notes: "" });
     },
@@ -122,9 +138,13 @@ export default function ShiftsPage({ params }: PageProps) {
   const closeMutation = useMutation({
     mutationFn: ({ shiftId, data }: { shiftId: string; data: CloseShiftRequest }) =>
       shiftApi.close(pharmacyId, shiftId, data),
-    onSuccess: () => {
+    onSuccess: (closed) => {
       toast.success("Day closed — new sales now start the next day");
+      // Straight to the end-of-day report, ready to send to the owner.
+      setReportShiftId(closed.id);
       qc.invalidateQueries({ queryKey: ["shifts", pharmacyId] });
+      // Opening or closing the day changes what "today" is for the shop.
+      qc.invalidateQueries({ queryKey: ["business-day", pharmacyId] });
       setShowClose(false);
       setCloseTarget(null);
       setCloseForm({ closingCash: "", notes: "" });
@@ -135,6 +155,26 @@ export default function ShiftsPage({ params }: PageProps) {
         "Failed to close shift";
       toast.error(msg);
     },
+  });
+
+  const countMutation = useMutation({
+    mutationFn: () => shiftApi.recordCount(pharmacyId, countTarget!.id, parseFloat(countForm.cash), countForm.reason.trim()),
+    onSuccess: () => {
+      toast.success("Cash count saved");
+      qc.invalidateQueries({ queryKey: ["shifts", pharmacyId] });
+      setCountTarget(null);
+    },
+    onError: (e) => toast.error(apiErrorMessage(e, "Could not save the count")),
+  });
+  const reopenMutation = useMutation({
+    mutationFn: () => shiftApi.reopen(pharmacyId, reopenTarget!.id, reopenReason.trim()),
+    onSuccess: () => {
+      toast.success("Shift opened again");
+      qc.invalidateQueries({ queryKey: ["shifts", pharmacyId] });
+      qc.invalidateQueries({ queryKey: ["business-day", pharmacyId] });
+      setReopenTarget(null);
+    },
+    onError: (e) => toast.error(apiErrorMessage(e, "Could not open the shift again")),
   });
 
   function handleOpenShift(e: React.FormEvent) {
@@ -280,16 +320,36 @@ export default function ShiftsPage({ params }: PageProps) {
                         {fmtDate(shift.closedAt)}
                       </TableCell>
                       <TableCell>
-                        {shift.status === "Open" && (
-                          <Button
-                            variant="ghost" size="icon"
-                            className="h-8 w-8 text-destructive hover:text-destructive"
-                            onClick={() => openCloseDialog(shift)}
-                            title="Close day"
-                          >
-                            <Square className="h-4 w-4" />
-                          </Button>
-                        )}
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="Shift actions"><MoreHorizontal className="h-4 w-4" /></Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            {shift.status === "Open" && (
+                              <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={() => openCloseDialog(shift)}>
+                                <Square className="h-4 w-4 mr-2" />Close day
+                              </DropdownMenuItem>
+                            )}
+                            <DropdownMenuItem onClick={() => setReportShiftId(shift.id)}>
+                              <FileText className="h-4 w-4 mr-2" />Day report
+                            </DropdownMenuItem>
+                            {canFix && shift.status === "Closed" && shift.closingCash == null && (
+                              <DropdownMenuItem onClick={() => { setCountTarget(shift); setCountForm({ cash: "", reason: "" }); }}>
+                                <Banknote className="h-4 w-4 mr-2" />Enter counted cash
+                              </DropdownMenuItem>
+                            )}
+                            {isSupport && shift.status === "Closed" && (
+                              <DropdownMenuItem onClick={() => { setReopenTarget(shift); setReopenReason(""); }}>
+                                <RotateCcw className="h-4 w-4 mr-2" />Open again (support)
+                              </DropdownMenuItem>
+                            )}
+                            {canFix && !isSupport && (
+                              <DropdownMenuItem onClick={() => setHelp({ kind: "ShiftCash", shiftId: shift.id, branchId: shift.branchId, businessDate: shift.businessDate ?? undefined, about: `Shift of ${fmtDay(shift.businessDate)}` })}>
+                                <LifeBuoy className="h-4 w-4 mr-2" />Ask Gene Pharmacy to fix
+                              </DropdownMenuItem>
+                            )}
+                          </DropdownMenuContent>
+                        </DropdownMenu>
                       </TableCell>
                     </TableRow>
                   );
@@ -374,6 +434,59 @@ export default function ShiftsPage({ params }: PageProps) {
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      <ShiftReportDialog pharmacyId={pharmacyId} shiftId={reportShiftId} onClose={() => setReportShiftId(null)} />
+      <RequestHelpDialog pharmacyId={pharmacyId} context={help} onClose={() => setHelp(null)} />
+
+      {/* Count the cash of a shift that was closed without a count */}
+      <Dialog open={!!countTarget} onOpenChange={(o) => !o && setCountTarget(null)}>
+        <DialogContent className="sm:max-w-md" aria-describedby={undefined}>
+          <DialogHeader><DialogTitle>Enter counted cash</DialogTitle></DialogHeader>
+          <div className="space-y-3 px-6 py-2">
+            <p className="text-sm text-muted-foreground">
+              {branchMap[countTarget?.branchId ?? ""] ?? "This branch"}, {fmtDay(countTarget?.businessDate)}: the day was closed without a cash count.
+              Expected in the drawer: <strong>TZS {fmt(countTarget?.expectedCash)}</strong>. Once saved, the count cannot be changed.
+            </p>
+            <div className="space-y-1">
+              <Label>Cash counted (TZS) *</Label>
+              <Input type="number" min="0" step="0.01" value={countForm.cash} onChange={(e) => setCountForm((f) => ({ ...f, cash: e.target.value }))} />
+            </div>
+            <div className="space-y-1">
+              <Label>Why now? *</Label>
+              <Input placeholder="e.g. Counted the next morning" maxLength={500} value={countForm.reason} onChange={(e) => setCountForm((f) => ({ ...f, reason: e.target.value }))} />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCountTarget(null)}>Cancel</Button>
+            <Button disabled={countForm.cash === "" || Number(countForm.cash) < 0 || countForm.reason.trim().length < 5 || countMutation.isPending} onClick={() => countMutation.mutate()}>
+              {countMutation.isPending ? "Saving…" : "Save count"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Gene Pharmacy support: open a shift closed by mistake again */}
+      <Dialog open={!!reopenTarget} onOpenChange={(o) => !o && setReopenTarget(null)}>
+        <DialogContent className="sm:max-w-md" aria-describedby={undefined}>
+          <DialogHeader><DialogTitle>Open this shift again</DialogTitle></DialogHeader>
+          <div className="space-y-3 px-6 py-2">
+            <p className="text-sm text-muted-foreground">
+              The day of {fmtDay(reopenTarget?.businessDate)} carries on: new sales count on it until it is closed again, and its cash count is cleared.
+              Only the latest shift of a branch, closed in the last 48 hours, can be opened again.
+            </p>
+            <div className="space-y-1">
+              <Label>Reason * (at least 10 characters)</Label>
+              <Input placeholder="e.g. Closed by mistake at noon, shop still open" maxLength={500} value={reopenReason} onChange={(e) => setReopenReason(e.target.value)} />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setReopenTarget(null)}>Cancel</Button>
+            <Button disabled={reopenReason.trim().length < 10 || reopenMutation.isPending} onClick={() => reopenMutation.mutate()}>
+              {reopenMutation.isPending ? "Opening…" : "Open again"}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
