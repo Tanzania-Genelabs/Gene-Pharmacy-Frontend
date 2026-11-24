@@ -674,6 +674,12 @@ export interface CreateSaleRequest {
   /** Optional sale-level discount (monetary, not percentage) */
   discountAmount?: number;
   notes?: string;
+  /** When the sale really happened (ISO). Only sent for a sale entered late for an earlier day. */
+  saleDate?: string;
+  /** The till's own id for the sale, so a resend never creates a second one. */
+  clientReference?: string;
+  /** An owner or manager entering a sale made on an earlier day. The server refuses it from a Seller. */
+  lateEntry?: boolean;
   items: SaleItemRequest[];
 }
 
@@ -734,6 +740,8 @@ export interface SaleSummaryResponse {
   businessDate?: string | null;
   /** Set when Gene Pharmacy support moved the sale to another business day. */
   businessDateMovedAt?: string | null;
+  /** Manager / Approved / Delayed when the sale reached the books after the day it was made on. */
+  lateKind?: "Manager" | "Approved" | "Delayed" | null;
 }
 
 /** GET /pharmacies/{id}/business-day: what "today" means for the shop right now. */
@@ -1970,6 +1978,20 @@ export interface DashboardTopProduct {
   profit: string;
 }
 
+/** A product that sells often: ranked by how many sales it was in, with units, its share of the period's sales and what is left. */
+export interface DashboardFastProduct {
+  drugId: string;
+  drugName: string;
+  unit: string | null;
+  /** In how many sales the product was sold. */
+  timesSold: number;
+  unitsSold: number;
+  revenue: string;
+  /** Share of the period's sales that included the product, in percent. */
+  sharePercent: number;
+  stockLeft: number;
+}
+
 export interface DashboardSetupItem {
   key: "branch" | "drugs" | "stock" | "sellingPrices" | "buyingPrices" | "firstSale" | "secondUser" | string;
   label: string;
@@ -1993,6 +2015,8 @@ export interface OwnerDashboardResponse {
   /** Always 14 entries, oldest first; the last one is today. */
   daily: { date: string; revenue: string; profit: string; salesCount: number }[];
   topProducts: { today: DashboardTopProduct[]; last7Days: DashboardTopProduct[] };
+  /** Absent when the server is older than this feature. */
+  fastMoving?: { today: DashboardFastProduct[]; last7Days: DashboardFastProduct[]; last30Days: DashboardFastProduct[] };
   /** Empty when one branch is shown or the pharmacy has a single branch. */
   branches: { branchId: string; branchName: string; revenue: string; salesCount: number; profit: string }[];
   sellers: {
@@ -2045,6 +2069,33 @@ export interface ShiftReport {
   expensesCount: number;
   expensesTotal: string;
   topItems: { name: string; quantity: number; amount: string }[];
+  /** Sales recorded after the day was counted (late requests, back-entries, delayed tills), inside this shift's hours. */
+  lateAfterCloseCount?: number;
+  lateAfterCloseTotal?: string;
+  lateAfterCloseCash?: string;
+  /** The cash the drawer should hold once the late cash sales are counted in. */
+  expectedCashWithLate?: string | null;
+}
+
+export interface LateSaleRequest {
+  id: string;
+  branchId: string;
+  requestedBy: string;
+  requestedByName: string | null;
+  receiptNumber: string;
+  saleDate: string;
+  /** The day the sale will be counted on (Y-m-d). */
+  businessDay: string;
+  paymentMethod: SalePaymentMethod | null;
+  totalAmount: string;
+  items: { drugId: string; drugName: string; quantity: number; isHalfDose: boolean; unitPrice: string; lineTotal: string }[];
+  notes: string | null;
+  status: "Pending" | "Approved" | "Rejected";
+  decidedByName: string | null;
+  decidedAt: string | null;
+  decisionNote: string | null;
+  saleId: string | null;
+  createdAt: string;
 }
 
 export type SupportRequestKind = "MoveSales" | "ShiftCash" | "Other";
