@@ -16,6 +16,7 @@ import { AttentionList } from "./attention-list";
 import { PeriodCompare } from "./period-compare";
 import { DailyChart } from "./daily-chart";
 import { BestSellers } from "./best-sellers";
+import { FastMoving } from "./fast-moving";
 import { BranchesToday, SellersToday } from "./leaderboards";
 import { StockCard } from "./stock-card";
 import { SetupChecklist } from "./setup-checklist";
@@ -126,6 +127,8 @@ export function OwnerDashboard({ pharmacyId }: { pharmacyId: string }) {
             </div>
             <StockCard stock={data.stock} pharmacyId={pharmacyId} />
           </div>
+
+          {data.fastMoving && <FastMoving fast={data.fastMoving} />}
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <BestSellers today={data.topProducts.today} last7Days={data.topProducts.last7Days} />
