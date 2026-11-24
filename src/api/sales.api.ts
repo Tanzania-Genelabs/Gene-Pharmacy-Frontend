@@ -1,5 +1,5 @@
 import api from "@/lib/api";
-import type { Page, SaleResponse, SaleSummaryResponse, CreateSaleRequest, VoidSaleRequest, MoveSalesDayResult } from "@/types";
+import type { Page, SaleResponse, SaleSummaryResponse, CreateSaleRequest, VoidSaleRequest, MoveSalesDayResult, LateSaleRequest } from "@/types";
 
 export const salesApi = {
   create: (pharmacyId: string, data: CreateSaleRequest) =>
@@ -10,6 +10,20 @@ export const salesApi = {
 
   getById: (pharmacyId: string, saleId: string) =>
     api.get<SaleResponse>(`/api/v1/pharmacies/${pharmacyId}/sales/${saleId}`).then((r) => r.data),
+
+  /** A seller asks for a sale to be recorded on an earlier day; nothing is sold until an owner or manager approves. */
+  requestLate: (pharmacyId: string, data: CreateSaleRequest) =>
+    api.post<LateSaleRequest>(`/api/v1/pharmacies/${pharmacyId}/sales/late-requests`, data).then((r) => r.data),
+
+  /** A seller sees their own requests; owners and managers see everyone's. Pending first. */
+  lateRequests: (pharmacyId: string) =>
+    api.get<Page<LateSaleRequest>>(`/api/v1/pharmacies/${pharmacyId}/sales/late-requests`, { params: { page: 0, size: 100 } }).then((r) => r.data),
+
+  approveLate: (pharmacyId: string, id: string) =>
+    api.post<LateSaleRequest>(`/api/v1/pharmacies/${pharmacyId}/sales/late-requests/${id}/approve`, {}).then((r) => r.data),
+
+  rejectLate: (pharmacyId: string, id: string, reason: string) =>
+    api.post<LateSaleRequest>(`/api/v1/pharmacies/${pharmacyId}/sales/late-requests/${id}/reject`, { reason }).then((r) => r.data),
 
   /** Gene Pharmacy support only (inside a support session): count the chosen sales on another business day. */
   moveBusinessDay: (pharmacyId: string, data: { saleIds: string[]; targetDate: string; reason: string }) =>
