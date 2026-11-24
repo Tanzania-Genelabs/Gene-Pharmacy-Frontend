@@ -31,6 +31,10 @@ export function dayReportText(r: ShiftReport): string {
   lines.push("*Cash*");
   lines.push(`  Opening: ${tzs(s.openingCash)}`);
   if (s.expectedCash != null) lines.push(`  Expected: ${tzs(s.expectedCash)}`);
+  if ((r.lateAfterCloseCount ?? 0) > 0) {
+    lines.push(`  Recorded after the count: ${r.lateAfterCloseCount} sale(s) · ${tzs(r.lateAfterCloseTotal)} (cash ${tzs(r.lateAfterCloseCash)})`);
+    if (r.expectedCashWithLate != null) lines.push(`  Expected cash with these sales: ${tzs(r.expectedCashWithLate)}`);
+  }
   if (s.closingCash != null) {
     const diff = Number(s.cashDiscrepancy ?? 0);
     lines.push(`  Counted: ${tzs(s.closingCash)}`);
