@@ -31,7 +31,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { canSplitPack, formatQuantity, hasPacks, packInfo, packLabel, type PackInfo } from "@/lib/packs";
 import { cn } from "@/lib/utils";
 import { SALE_PAYMENT_PROVIDERS, salePaymentProviderLabel } from "@/types";
-import type { SalePaymentProvider, DrugResponse, SaleResponse, SaleSummaryResponse, SaleStatus, SalePaymentMethod, CreateSaleRequest, SalesDayRow } from "@/types";
+import type { SalePaymentProvider, DrugResponse, SaleResponse, SaleSummaryResponse, SaleStatus, SalePaymentMethod, CreateSaleRequest, SalesDayRow, LateSaleRequest } from "@/types";
 
 interface PageProps { params: Promise<{ pharmacyId: string }> }
 
@@ -57,6 +57,8 @@ const cartKey = (drugId: string, halfDose: boolean) => `${drugId}:${halfDose ? "
 const stockUnitsOf = (i: Pick<CartItem, "quantity" | "halfDose">) => (i.halfDose ? i.quantity / 2 : i.quantity);
 
 function fmt(n: number) { return n.toLocaleString("en-TZ"); }
+/** "Sun 22 Nov" for a Y-m-d day. */
+function shortDay(day: string) { return parseYmd(day).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" }); }
 
 const HISTORY_PRESETS: PeriodPreset[] = ["today", "yesterday", "7d", "month", "custom"];
 
@@ -185,6 +187,11 @@ function SalesTable({ sales, loading, emptyText, isSeller, onView, onVoid, selec
                   {fmtDate(sale.saleDate)}
                   {sale.businessDate && sale.businessDate !== ymd(new Date(sale.saleDate)) && (
                     <div className="text-[11px]">Counted on {parseYmd(sale.businessDate).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}{sale.businessDateMovedAt ? " (moved by support)" : ""}</div>
+                  )}
+                  {sale.lateKind && (
+                    <div className="text-[11px] text-amber-600 dark:text-amber-400">
+                      {sale.lateKind === "Approved" ? "Entered late (approved)" : sale.lateKind === "Manager" ? "Entered late by a manager" : "Sent late by the till"}
+                    </div>
                   )}
                 </TableCell>
                 <TableCell>
@@ -318,7 +325,14 @@ export default function SalesPage({ params }: PageProps) {
     return next;
   }), []);
 
-  const [tab, setTab] = useState<"pos" | "today" | "history">("pos");
+  const [tab, setTab] = useState<"pos" | "today" | "history" | "late">("pos");
+  const [rejectTarget, setRejectTarget] = useState<LateSaleRequest | null>(null);
+  const [rejectReason, setRejectReason] = useState("");
+  // A sale the seller could not record on the day (broken phone, no signal...): an owner or manager enters it
+  // directly; a seller sends it as a request that sells nothing until a manager approves it.
+  const [saleDay, setSaleDay] = useState("");
+  const [saleTime, setSaleTime] = useState("12:00");
+  const [confirmLate, setConfirmLate] = useState(false);
   // Owners and managers pick a branch once; it is remembered on this device until they change it.
   const branchKey = `gene:sales-branch:${pharmacyId}:${user?.id ?? ""}`;
   const [branchId, setBranchIdState] = useState(user?.branchId ?? "");
@@ -436,6 +450,16 @@ export default function SalesPage({ params }: PageProps) {
     enabled: tab === "today",
     refetchInterval: 30_000,
   });
+  // The sales already recorded on the day being entered, so nothing is typed in twice.
+  const lateDay = saleDay && saleDay < businessToday ? saleDay : "";
+  const earliestLateDay = ymd(new Date(businessNow.getFullYear(), businessNow.getMonth(), businessNow.getDate() - 7));
+  const { data: lateDaySales, isLoading: lateDayLoading } = useQuery({
+    queryKey: ["sales", pharmacyId, "pos-day", lateDay, branchId],
+    queryFn: () => salesApi.list(pharmacyId, { page: 0, size: 200, businessDate: lateDay, branchId: branchId || undefined }),
+    enabled: !!lateDay,
+  });
+  const lateDayCompleted = (lateDaySales?.content ?? []).filter((sale) => sale.status === "Completed");
+  const lateDayTotal = lateDayCompleted.reduce((sum, sale) => sum + Number(sale.netAmount), 0);
   const todayCompleted = (today?.content ?? []).filter((sale) => sale.status === "Completed");
   const todayTotal = todayCompleted.reduce((sum, sale) => sum + Number(sale.netAmount), 0);
   const todayVoided = (today?.content ?? []).filter((sale) => sale.status === "Voided").length;
@@ -540,6 +564,42 @@ export default function SalesPage({ params }: PageProps) {
     },
   });
 
+  // A seller's request for an earlier day: nothing is sold, so no receipt and no stock change.
+  const lateRequestMutation = useMutation({
+    mutationFn: (data: CreateSaleRequest) => salesApi.requestLate(pharmacyId, data),
+    onSuccess: () => {
+      toast.success("Sent to your manager for approval. Nothing is sold until they approve it.");
+      setCart([]); setNotes(""); setAmountPaid(""); setPaymentReference("");
+      qc.invalidateQueries({ queryKey: ["late-requests", pharmacyId] });
+    },
+    onError: (err: unknown) => {
+      const axiosErr = err as { response?: { data?: { message?: string } } };
+      toast.error(axiosErr?.response?.data?.message ?? "Could not send the request");
+    },
+  });
+
+  const decideLateMutation = useMutation({
+    mutationFn: ({ id, reason }: { id: string; reason?: string }) => reason ? salesApi.rejectLate(pharmacyId, id, reason) : salesApi.approveLate(pharmacyId, id),
+    onSuccess: (r) => {
+      toast.success(r.status === "Approved" ? "Sale recorded" : "Request rejected");
+      setRejectTarget(null);
+      qc.invalidateQueries({ queryKey: ["late-requests", pharmacyId] });
+      qc.invalidateQueries({ queryKey: ["sales", pharmacyId] });
+      qc.invalidateQueries({ queryKey: ["inventory", pharmacyId] });
+    },
+    onError: (err: unknown) => {
+      const axiosErr = err as { response?: { data?: { message?: string } } };
+      toast.error(axiosErr?.response?.data?.message ?? "Could not complete that");
+    },
+  });
+
+  const { data: lateRequests, isLoading: lateLoading } = useQuery({
+    queryKey: ["late-requests", pharmacyId],
+    queryFn: () => salesApi.lateRequests(pharmacyId),
+    refetchInterval: 60_000,
+  });
+  const latePending = (lateRequests?.content ?? []).filter((r) => r.status === "Pending").length;
+
   const voidMutation = useMutation({
     mutationFn: ({ id, reason }: { id: string; reason: string }) => salesApi.void(pharmacyId, id, { reason }),
     onSuccess: () => {
@@ -573,15 +633,14 @@ export default function SalesPage({ params }: PageProps) {
     finally { setDetailLoading(false); }
   }
 
-  function generateReceiptNumber(): string {
-    const now = new Date();
+  function generateReceiptNumber(now: Date = new Date()): string {
     const ymd = now.toISOString().slice(0, 10).replace(/-/g, "");
     const hms = now.toTimeString().slice(0, 8).replace(/:/g, "");
     const rand = Math.random().toString(36).slice(2, 6).toUpperCase();
     return `RCP-${ymd}-${hms}-${rand}`;
   }
 
-  function handleCompleteSale() {
+  function handleCompleteSale(confirmed = false) {
     if (cart.length === 0) { toast.error("Cart is empty"); return; }
     if (!branchId) { toast.error("Select a branch first"); return; }
     if (!user?.id) { toast.error("Not authenticated"); return; }
@@ -589,10 +648,16 @@ export default function SalesPage({ params }: PageProps) {
     if (unpriced) { toast.error(`Type the price for ${unpriced.drugName}`); return; }
     const paid = parseFloat(amountPaid) || netTotal;
     if (paid < netTotal) { toast.error(`Amount paid (TZS ${fmt(paid)}) is less than total (TZS ${fmt(netTotal)})`); return; }
-    completeSaleMutation.mutate({
+    // A sale for an earlier day is explained and confirmed first; a normal sale goes straight through.
+    const madeAt = lateDay ? new Date(`${lateDay}T${saleTime}:00`) : null;
+    if (lateDay && (!madeAt || Number.isNaN(madeAt.getTime()))) { toast.error("Enter the time the sale was made, e.g. 14:30"); return; }
+    if (lateDay && !confirmed) { setConfirmLate(true); return; }
+    const send = lateDay && isSeller ? lateRequestMutation.mutate : completeSaleMutation.mutate;
+    send({
       branchId,
       soldBy: user.id,
-      receiptNumber: generateReceiptNumber(),
+      receiptNumber: generateReceiptNumber(madeAt ?? new Date()),
+      ...(madeAt ? { saleDate: madeAt.toISOString(), clientReference: crypto.randomUUID(), lateEntry: true } : {}),
       paymentMethod,
       ...(paymentMethod === "MobileMoney" && paymentProvider ? { paymentProvider } : {}),
       ...((["MobileMoney", "Card", "Insurance"] as SalePaymentMethod[]).includes(paymentMethod) && paymentReference.trim()
@@ -631,6 +696,7 @@ export default function SalesPage({ params }: PageProps) {
           { key: "pos" as const, label: "POS Terminal", icon: Monitor },
           { key: "today" as const, label: "Today's Sales", icon: CalendarDays },
           { key: "history" as const, label: "Sales History", icon: History },
+          { key: "late" as const, label: "Late Sales", icon: AlertCircle },
         ].map(({ key, label, icon: Icon }) => (
           <button
             key={key}
@@ -646,6 +712,9 @@ export default function SalesPage({ params }: PageProps) {
             )}
             {key === "today" && today && (
               <span className="text-xs text-muted-foreground ml-1">({today.totalElements})</span>
+            )}
+            {key === "late" && latePending > 0 && (
+              <span className="ml-1 bg-amber-500 text-white text-xs rounded-full min-w-5 h-5 px-1 flex items-center justify-center">{latePending}</span>
             )}
             {key === "history" && tab === "history" && histDays && (
               <span className="text-xs text-muted-foreground ml-1">({histDays.totals.salesCount})</span>
@@ -883,6 +952,51 @@ export default function SalesPage({ params }: PageProps) {
               </div>
             )}
 
+            {/* Sale day: owners and managers can enter a sale made on an earlier day */}
+            {(
+              <div className="rounded-lg border border-border p-2.5 space-y-2 flex-shrink-0">
+                <div className="flex items-center justify-between gap-2">
+                  <Label className="text-xs flex items-center gap-1"><CalendarDays className="h-3.5 w-3.5" />Day of the sale</Label>
+                  {lateDay && <button className="text-[11px] text-primary hover:underline" onClick={() => setSaleDay("")}>Back to today</button>}
+                </div>
+                <div className="flex gap-2">
+                  <Input
+                    type="date" className="h-8 text-xs" value={saleDay || businessToday}
+                    min={earliestLateDay} max={businessToday}
+                    onChange={(e) => setSaleDay(e.target.value >= businessToday ? "" : e.target.value)}
+                  />
+                  {lateDay && (
+                    <Input type="time" className="h-8 w-28 text-xs" value={saleTime} onChange={(e) => setSaleTime(e.target.value)} />
+                  )}
+                </div>
+                {!lateDay ? (
+                  <p className="text-[11px] leading-snug text-muted-foreground">
+                    {isSeller ? "Sales are recorded for today. If you could not enter a sale on the day, pick that day (up to 7 days back) and send it to your manager for approval." : "Sales are recorded for today. If a seller could not enter yesterday&apos;s sales, pick that day (up to 7 days back) to record them."}
+                  </p>
+                ) : (
+                  <div className="space-y-1.5 rounded-md bg-amber-50 dark:bg-amber-950/30 p-2 text-[11px] leading-snug text-amber-900 dark:text-amber-200">
+                    <p className="font-semibold">{isSeller ? "Requesting" : "Recording"} for {shortDay(lateDay)} — not today</p>
+                    <p>Only sales counted on this day are shown below, so you can check what is already recorded before adding more. {isSeller ? "Your manager must approve it before it counts." : "Each sale you add here is marked &quot;entered late&quot; in the audit log."}</p>
+                    {lateDayLoading ? <p>Loading that day…</p> : (
+                      <>
+                        <p className="font-medium">{lateDayCompleted.length} sale{lateDayCompleted.length === 1 ? "" : "s"} already recorded · TZS {fmt(lateDayTotal)}</p>
+                        {lateDayCompleted.length > 0 && (
+                          <ul className="max-h-24 overflow-y-auto space-y-0.5">
+                            {lateDayCompleted.map((s) => (
+                              <li key={s.id} className="flex justify-between gap-2">
+                                <span className="truncate">{new Date(s.saleDate).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })} · {s.receiptNumber}</span>
+                                <span className="whitespace-nowrap">TZS {fmt(Number(s.netAmount))}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Cart items */}
             <div className="flex-1 overflow-y-auto space-y-2 pr-1">
               {cart.length === 0 ? (
@@ -1036,13 +1150,21 @@ export default function SalesPage({ params }: PageProps) {
               </div>
               <Button
                 className="w-full" size="lg"
-                onClick={handleCompleteSale}
-                disabled={completeSaleMutation.isPending || !branchId || cart.length === 0}
+                onClick={() => handleCompleteSale()}
+                disabled={completeSaleMutation.isPending || lateRequestMutation.isPending || !branchId || cart.length === 0}
               >
-                {completeSaleMutation.isPending ? "Processing…" : (
-                  <><Receipt className="h-4 w-4 mr-2" />Complete Sale · TZS {fmt(netTotal)}</>
+                {completeSaleMutation.isPending || lateRequestMutation.isPending ? "Processing…" : (
+                  <><Receipt className="h-4 w-4 mr-2" />{lateDay ? (isSeller ? `Send for Approval (${shortDay(lateDay)})` : `Record Sale for ${shortDay(lateDay)}`) : "Complete Sale"} · TZS {fmt(netTotal)}</>
                 )}
               </Button>
+              {/* What the button will do, before it is pressed. */}
+              <p className="text-[11px] leading-snug text-muted-foreground">
+                {lateDay && isSeller
+                  ? `Sends a request to your manager to record this sale on ${shortDay(lateDay)} at ${saleTime || "—"}. Nothing is sold, no stock is taken and no money is counted until they approve it. You will be asked to confirm first.`
+                  : lateDay
+                  ? `Saves this sale as made on ${shortDay(lateDay)} at ${saleTime || "—"}, not today. It is counted in that day's reports and takes the stock off the shelf now. You will be asked to confirm first.`
+                  : "Saves the sale now on today's business day, takes the items off the shelf and shows the receipt to print. A sale cannot be edited afterwards, only voided."}
+              </p>
             </div>
           </div>
         </div>
@@ -1079,6 +1201,53 @@ export default function SalesPage({ params }: PageProps) {
             onView={viewDetail}
             onVoid={(sale) => { setVoidTarget(sale); setVoidReason(""); }}
           />
+        </div>
+      )}
+
+      {/* ════════════════════════════════════════════════════════════════════
+          LATE SALES: requests for an earlier day, waiting for a manager
+      ════════════════════════════════════════════════════════════════════ */}
+      {tab === "late" && (
+        <div className="space-y-3 max-w-3xl">
+          <p className="text-sm text-muted-foreground">
+            {isSeller
+              ? "Sales you asked your manager to record on an earlier day. Nothing is sold until a manager approves it."
+              : "Sales a seller asked to record on an earlier day. Nothing is sold, no stock is taken and no money is counted until you approve it."}
+          </p>
+          {lateLoading ? <p className="text-sm text-muted-foreground">Loading…</p> : (lateRequests?.content.length ?? 0) === 0 ? (
+            <div className="rounded-xl border-2 border-dashed p-10 text-center text-sm text-muted-foreground">
+              No late sales. {isSeller ? "To ask for one, pick an earlier day in the POS Terminal." : "When a seller asks for a sale to be recorded on an earlier day, it appears here."}
+            </div>
+          ) : lateRequests!.content.map((r) => (
+            <Card key={r.id}><CardContent className="p-4 space-y-2">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <p className="font-semibold">For {shortDay(r.businessDay)}</p>
+                  <p className="text-xs text-muted-foreground">{r.receiptNumber} · {fmtDate(r.saleDate)}{r.paymentMethod ? ` · ${r.paymentMethod}` : ""}{!isSeller && r.requestedByName ? ` · requested by ${r.requestedByName}` : ""}</p>
+                </div>
+                <Badge variant={r.status === "Approved" ? "default" : r.status === "Rejected" ? "destructive" : "secondary"}>{r.status === "Pending" ? "Waiting" : r.status}</Badge>
+              </div>
+              <ul className="text-sm space-y-0.5">
+                {r.items.map((i) => (
+                  <li key={`${i.drugId}:${i.isHalfDose}`} className="flex justify-between gap-2">
+                    <span>{i.drugName} × {i.quantity}{i.isHalfDose ? " (½)" : ""}</span><span className="tabular-nums">TZS {fmt(Number(i.lineTotal))}</span>
+                  </li>
+                ))}
+              </ul>
+              <div className="flex justify-between border-t pt-2 font-semibold"><span>Total</span><span className="tabular-nums">TZS {fmt(Number(r.totalAmount))}</span></div>
+              {r.notes && <p className="text-xs text-muted-foreground">{r.notes}</p>}
+              {r.status === "Rejected" && r.decisionNote && <p className="text-xs text-destructive">{r.decidedByName ? `${r.decidedByName}: ` : ""}{r.decisionNote}</p>}
+              {!isSeller && r.status === "Pending" && (
+                <div className="flex gap-2 pt-1">
+                  <Button size="sm" disabled={decideLateMutation.isPending} onClick={() => decideLateMutation.mutate({ id: r.id })}>Approve and record</Button>
+                  <Button size="sm" variant="outline" disabled={decideLateMutation.isPending} onClick={() => { setRejectReason(""); setRejectTarget(r); }}>Reject</Button>
+                </div>
+              )}
+              {!isSeller && r.status === "Pending" && (
+                <p className="text-[11px] text-muted-foreground">Approving records it as made on {shortDay(r.businessDay)}, takes the stock off the shelf now and counts it in that day&apos;s sales. It is marked in the audit log.</p>
+              )}
+            </CardContent></Card>
+          ))}
         </div>
       )}
 
@@ -1317,6 +1486,50 @@ export default function SalesPage({ params }: PageProps) {
       <RequestHelpDialog pharmacyId={pharmacyId} context={help} onClose={() => setHelp(null)} />
 
       {/* ── Move to another business day (Gene Pharmacy support only) ───── */}
+      <Dialog open={!!rejectTarget} onOpenChange={(o) => !o && setRejectTarget(null)}>
+        <DialogContent className="sm:max-w-sm" aria-describedby={undefined}>
+          <DialogHeader><DialogTitle>Reject this request?</DialogTitle></DialogHeader>
+          <div className="space-y-2 px-6 py-2">
+            <Label className="text-xs">Reason (the seller will see it)</Label>
+            <Input value={rejectReason} maxLength={300} onChange={(e) => setRejectReason(e.target.value)} autoFocus />
+          </div>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setRejectTarget(null)}>Go back</Button>
+            <Button variant="destructive" disabled={rejectReason.trim().length < 3 || decideLateMutation.isPending}
+              onClick={() => rejectTarget && decideLateMutation.mutate({ id: rejectTarget.id, reason: rejectReason.trim() })}>Reject</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Confirm a sale entered for an earlier day, with what will happen */}
+      <Dialog open={confirmLate} onOpenChange={setConfirmLate}>
+        <DialogContent className="sm:max-w-md" aria-describedby={undefined}>
+          <DialogHeader><DialogTitle>{isSeller ? "Ask your manager to record" : "Record"} this sale for {lateDay ? shortDay(lateDay) : ""}?</DialogTitle></DialogHeader>
+          <div className="space-y-2 text-sm">
+            <p><span className="font-semibold">{cart.length}</span> item line{cart.length === 1 ? "" : "s"}, total <span className="font-semibold">TZS {fmt(netTotal)}</span>, paid by {paymentMethod}.</p>
+            {isSeller ? (
+              <ul className="list-disc pl-5 space-y-1 text-muted-foreground">
+                <li>This is a <span className="font-medium text-foreground">request</span>, not a sale. Nothing is sold, no stock is taken and no money is counted yet.</li>
+                <li>Your manager sees it under <span className="font-medium text-foreground">Late Sales</span> and approves or rejects it. If approved it is recorded as made on <span className="font-medium text-foreground">{lateDay ? shortDay(lateDay) : ""} at {saleTime}</span>, in your name.</li>
+                <li>You can follow its status under Late Sales. Do not give the customer a receipt until it is approved.</li>
+                <li>Check the list of sales already recorded for that day first, so the same sale is not sent twice.</li>
+              </ul>
+            ) : (
+            <ul className="list-disc pl-5 space-y-1 text-muted-foreground">
+              <li>The sale is saved as made on <span className="font-medium text-foreground">{lateDay ? shortDay(lateDay) : ""} at {saleTime}</span>, so it appears in that day&apos;s sales and reports, not today&apos;s.</li>
+              <li>The items are taken off the shelf now. If stock has since run out, the sale is still saved and the managers are told to recount.</li>
+              <li>The receipt is marked with your name as &quot;entered late&quot; in the audit log, and it cannot be edited afterwards, only voided.</li>
+              <li>Check the list of sales already recorded for that day first, so the same sale is not entered twice.</li>
+            </ul>
+            )}
+          </div>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setConfirmLate(false)}>Go back</Button>
+            <Button onClick={() => { setConfirmLate(false); handleCompleteSale(true); }}>{isSeller ? "Yes, send it" : "Yes, record it"}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={moveOpen} onOpenChange={(o) => !o && setMoveOpen(false)}>
         <DialogContent className="sm:max-w-md" aria-describedby={undefined}>
           <DialogHeader><DialogTitle>Move {picked.size} receipt{picked.size === 1 ? "" : "s"} to another day</DialogTitle></DialogHeader>
